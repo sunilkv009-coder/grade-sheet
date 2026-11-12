@@ -1,0 +1,72 @@
+# Grade Sheet
+
+A multi-camera grading contact sheet for Unreal Engine. See every camera of a scene side by side, each with its own
+levels active, and grade them together so they match. Built for automotive real-time work where each camera angle
+has its own level and lighting.
+
+Requires **Unreal Engine 5.4 or newer** on **Windows**. Developed and tested on 5.8.
+
+## Install
+
+Pick one:
+
+1. **Installer** - download this repository (Code > Download ZIP), unzip it, and drag your project's `.uproject`
+   file onto `install.bat`.
+2. **By hand** - copy this folder into your project as `<YourProject>/Plugins/GradeSheet`.
+3. **Git** - from your project folder: `git clone <this repository's URL> Plugins/GradeSheet`
+
+Then start (or restart) Unreal. **Grade Sheet** appears in the top menu bar and on the toolbar.
+
+Nothing else to set up: the plugin is Python and HTML only, has no C++ to compile, and builds its materials inside
+your project the first time you open it (in `Content/GradeSheet`). It enables the engine's *Python Editor Script
+Plugin* and *Editor Scripting Utilities* for you.
+
+## First use
+
+1. **Grade Sheet > Assign part IDs to meshes** (once per project). Gives every mesh in your sublevels a stencil ID
+   per material, so grades can be masked by part. A level with `_base` in its name, or a read-only level, asks first.
+2. **Grade Sheet > Open Grade Sheet**. A window opens with the list of grade setups.
+3. **Create new**: name the setup, optionally tie it to variants from your Variant Manager tables, tick the cameras
+   (up to 8), then for each camera tick the levels that are active with it and choose the one level the grade lives
+   in. A live preview from Unreal shows exactly what you ticked.
+4. The contact sheet opens with one tile per camera. Grade, then **Save grades**.
+
+## What you can do
+
+- **Grade** with Nuke-style controls: blackpoint, whitepoint, lift, gain, multiply, offset, gamma, plus shadows,
+  midtones and highlights. Each has per-channel RGB trims.
+- **Four layers per camera**: the whole frame, and layers A, B and C that only act inside a mask.
+- **Mask by part** (click parts in the image, or tick whole levels or the background) and **by drawn bezier shapes**
+  with per-shape feather. A layer with both grades the chosen parts only inside the shapes.
+- **Match cameras**: set one as the match target, place a sample patch, and match another camera to it in one click.
+- **Compare**: a before/after divider, and an uploaded **reference image** side by side with zoom and pan.
+- **Full view** on any camera (or press `F`), **undo / redo** (`Ctrl+Z`, `Ctrl+Y`), `Ctrl`+click a slider to reset it.
+- **Variants**: a setup tied to a variant switches the car to it for its capture and stacks on top of the always-on
+  grade of the same camera.
+
+## What it creates in your project
+
+For a setup named `Overall` on a camera `Cam_01`:
+
+| Thing | Name | Where |
+| --- | --- | --- |
+| Post process volume (unbound) | `PPV_Grade_Cam_01__Overall` | the level you chose for that camera |
+| Grade material instance | `MI_Grade_Cam_01__Overall` | `Content/GradeSheet` |
+| Drawn-shape mask texture | `T_Mask_Cam_01__Overall` | `Content/GradeSheet` |
+
+The grade switches on and off with its level, so no extra Blueprint logic is needed at runtime. A setup tied to a
+variant is left **disabled** at rest; enable the volume whose name ends with the active variant from your own
+runtime logic.
+
+The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Captures and reference images are in
+`<YourProject>/Saved/GradeCaptures`.
+
+## Good to know
+
+- The tiles are captured stills. After changing lighting, the model or a camera, press **Recapture all**.
+- Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
+- Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil
+  Pass** to *Enabled with Stencil*.
+- One stencil ID per mesh (its first material), and 24 part groups per project.
+- Part-mask edges are not anti-aliased. Drawn shapes belong to one camera's framing.
+- The window is served from your own machine only (`127.0.0.1`) and opens in Edge or Chrome as an app window.

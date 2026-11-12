@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grade Contact Sheet</title>
+<style>
+  :root { --bg:#0e1014; --panel:#161920; --panel2:#1d212a; --line:#272c38; --text:#e7e9ef; --mute:#8a92a6;
+          --accent:#ff8a3d; --ref:#35d08a; --r:#ff6b6b; --g:#5fd38d; --b:#6aa8ff; --shape:#4fd6ff; --warn:#ffcc66; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:13px/1.4 "Inter","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+         display:flex; flex-direction:column; user-select:none; overflow:hidden; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:14px; font-weight:600; margin:0; letter-spacing:.2px; }
+  header .dot { width:9px; height:9px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); }
+  #openname { color:var(--accent); margin-left:10px; }
+  .su.cur { border-color:var(--accent); } .su button.primary { padding:0 12px; }
+  #wimg { transition:opacity .15s; }
+  #status { color:var(--mute); font-size:12px; padding:3px 10px; border-radius:99px; background:var(--panel2); min-height:22px; }
+  .grow { flex:1; }
+  button, select, input[type=text] { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { cursor:pointer; transition:background .12s, border-color .12s; white-space:nowrap; }
+  button:hover { background:#252a36; border-color:#3a4152; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#1a1206; font-weight:600; }
+  button.primary:hover { filter:brightness(1.08); }
+  button.on { border-color:var(--accent); color:var(--accent); background:rgba(255,138,61,.1); }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=text]:focus, select:focus { outline:none; border-color:var(--accent); }
+  input[type=checkbox] { accent-color:var(--accent); }
+  main { flex:1; display:flex; min-height:0; }
+  #grid { flex:1; display:grid; gap:12px; padding:14px; align-content:start; overflow:auto; }
+  .tile { background:var(--panel); border:2px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; }
+  .tile.sel { border-color:var(--accent); }
+  .tile.ref:not(.sel) { border-color:var(--ref); }
+  .cv { position:relative; aspect-ratio:16/9; background:#000; touch-action:none; overflow:hidden; }
+  .zw { position:absolute; inset:0; transform-origin:50% 50%; }                 /* zoomed and panned part: image, shapes, patch */
+  .tools { position:absolute; top:8px; right:8px; display:flex; gap:6px; z-index:4; }
+  .tools button { padding:2px 9px; font-size:11px; background:#000b; border-color:#fff3; }
+  .fit { display:none; }
+  .full { opacity:0; transition:opacity .15s; } .tile:hover .full, #grid.solo .full { opacity:1; }
+  /* motion: short and light */
+  .tile { transition:border-color .15s, box-shadow .15s; } .tile.sel { view-transition-name:seltile; }
+  ::view-transition-group(*) { animation-duration:.22s; } ::view-transition-old(root), ::view-transition-new(root) { animation-duration:.18s; }
+  @keyframes pop { from { opacity:0; transform:translateY(8px) scale(.98); } } @keyframes fade { from { opacity:0; } }
+  #wiz.open { animation:fade .15s ease-out; } #wiz.open .card { animation:pop .18s ease-out; }
+  .wmenu.open, #lvmenu.open { animation:pop .12s ease-out; }
+  input[type=range]::-webkit-slider-thumb { transition:transform .1s; } input[type=range]:hover::-webkit-slider-thumb { transform:scale(1.15); }
+  /* "preparing" overlay while Unreal captures */
+  main { position:relative; }
+  #busy { position:absolute; left:0; top:0; bottom:0; right:350px; display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+          background:rgba(14,16,20,.82); backdrop-filter:blur(6px); z-index:20; }
+  #busy.on { display:flex; animation:fade .2s ease-out; }
+  #busy svg { width:320px; height:110px; overflow:visible; }
+
+  #busy .wheel { animation:spin .35s linear infinite; transform-box:fill-box; transform-origin:center; } @keyframes spin { to { transform:rotate(360deg); } }
+  #busy .road { stroke-dasharray:14 12; animation:road .3s linear infinite; } @keyframes road { to { stroke-dashoffset:-26; } }
+  #busy .smoke circle { transform-box:fill-box; transform-origin:center; opacity:0; animation:puff .9s ease-out infinite; }
+  #busy .smoke circle:nth-child(2) { animation-delay:.3s; } #busy .smoke circle:nth-child(3) { animation-delay:.6s; }
+  @keyframes puff { 0% { opacity:.6; transform:translate(0, 0) scale(.5); } 100% { opacity:0; transform:translate(-52px, -12px) scale(2.4); } }
+  #busytxt { font-size:14px; font-weight:600; } #busysub { color:var(--mute); font-size:12px; }
+  #busybar { width:260px; height:4px; border-radius:2px; background:#2c3240; overflow:hidden; } #busybar i { display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease-out; }
+  #grid.solo { grid-template-columns:1fr !important; }
+  #grid.solo .tile { width:100%; max-width:calc((100vh - 150px) * 16 / 9); margin:0 auto; }
+  .cv.draw { cursor:crosshair; }
+  .cv canvas { width:100%; height:100%; display:block; }
+  .cv svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+  .cv svg path { fill:none; stroke:var(--shape); stroke-width:1.5; vector-effect:non-scaling-stroke; opacity:.75; }
+  .cv svg path.sel { stroke:#fff; opacity:1; stroke-dasharray:5 3; }
+  .cv svg line { stroke:#fff; stroke-width:1; vector-effect:non-scaling-stroke; opacity:.7; }
+  .cv svg circle { fill:#fff; stroke:#000; stroke-width:1; vector-effect:non-scaling-stroke; }
+  .cv svg circle.h { fill:var(--shape); }
+  .cv .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--mute); }
+  .patch { position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px; border:1.5px solid #fff; border-radius:3px;
+           box-shadow:0 0 0 1px #000; pointer-events:none; }
+  .wipe { position:absolute; top:0; bottom:0; width:22px; margin-left:-11px; cursor:ew-resize; display:none; z-index:3; touch-action:none; }
+  .wipe::before { content:""; position:absolute; left:10px; top:0; bottom:0; width:2px; background:#fff; box-shadow:0 0 0 1px #0006; }
+  .wipe i { position:absolute; left:1px; top:50%; width:20px; height:20px; margin-top:-10px; border-radius:50%; background:#fff; box-shadow:0 1px 4px #000a; }
+  .wipe span { position:absolute; bottom:8px; font-size:10px; font-weight:700; padding:2px 7px; border-radius:99px; background:#000a; color:#fff; white-space:nowrap; }
+  .wipe .wl { right:18px; } .wipe .wr { left:18px; }
+  .badge { position:absolute; top:8px; left:8px; background:var(--ref); color:#04130c; font-weight:700; font-size:10px;
+           padding:2px 7px; border-radius:99px; display:none; }
+  .tile.ref .badge { display:block; }
+  .meta { display:flex; align-items:center; gap:6px; padding:8px 12px; font-size:12px; flex-wrap:wrap; }
+  .meta b { font-weight:600; margin-right:2px; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:99px; padding:1px 8px; color:var(--mute); font-size:11px; }
+  .meta .chip { cursor:pointer; } .meta .chip.on { border-color:var(--accent); color:var(--accent); background:rgba(255,138,61,.1); }
+  .sw { width:14px; height:14px; border-radius:4px; border:1px solid #0008; }
+  .num { font-family:ui-monospace,Consolas,monospace; color:var(--mute); font-size:11px; }
+  .diff.bad { color:#ffb37a; } .diff.ok { color:var(--ref); }
+  aside { width:350px; border-left:1px solid var(--line); background:var(--panel); overflow-y:auto; }
+  .sec { padding:12px 16px; border-bottom:1px solid var(--line); }
+  .sec h2 { margin:0 0 2px; font-size:15px; font-weight:600; }
+  .sec .sub { color:var(--mute); font-size:12px; }
+  .lbl { color:var(--mute); font-size:11px; text-transform:uppercase; letter-spacing:.6px; margin:0 0 8px; }
+  .lbl.sp { margin-top:14px; }
+  .btns { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .btns.three { grid-template-columns:1fr 1fr 1fr; }
+  .btns .wide { grid-column:1/-1; }
+  .tabs { display:flex; background:var(--panel2); border-radius:9px; padding:3px; gap:3px; }
+  .tabs button { flex:1; border:0; background:transparent; padding:6px 2px; border-radius:7px; color:var(--mute); }
+  .tabs button.on { background:var(--accent); color:#1a1206; font-weight:600; }
+  .dd { position:relative; margin-top:8px; }
+  .dd > button { width:100%; text-align:left; display:flex; gap:8px; }
+  .dd > button span { flex:1; overflow:hidden; text-overflow:ellipsis; }
+  #lvmenu { display:none; position:absolute; left:0; right:0; top:calc(100% + 4px); background:var(--panel2); border:1px solid #3a4152;
+            border-radius:10px; padding:6px; z-index:10; box-shadow:0 8px 24px #000a; max-height:240px; overflow:auto; }
+  #lvmenu.open { display:block; }
+  label.ck { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; cursor:pointer; }
+  label.ck:hover { background:#252a36; }
+  label.ck small { color:var(--mute); margin-left:auto; }
+  label.ck small.warn { color:var(--warn); }
+  #parts { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0; max-height:92px; overflow:auto; }
+  #parts .chip { cursor:pointer; color:var(--text); }
+  #parts .chip.on { background:rgba(255,80,200,.18); border-color:#ff50c8; color:#ffb3ea; }
+  .shape { display:flex; align-items:center; gap:8px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; margin-top:6px; cursor:pointer; }
+  .shape.sel { border-color:var(--shape); background:rgba(79,214,255,.08); }
+  .shape .nm { width:58px; } .shape input { flex:1; --c:var(--shape); } .shape .num { width:38px; text-align:right; }
+  .shape button { padding:0 7px; height:22px; }
+  .hint { color:var(--mute); font-size:11px; margin-top:8px; }
+  #sliders { padding:8px 16px 16px; }
+  .row { padding:7px 0; }
+  .rh { display:flex; align-items:center; gap:8px; margin-bottom:3px; }
+  .rh .nm { font-weight:500; cursor:default; }
+  .rh output { margin-left:auto; min-width:44px; text-align:right; font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--mute); }
+  .rst { padding:0 5px; height:18px; font-size:12px; line-height:1; border-radius:5px; color:var(--mute); }
+  .rgbbtn { padding:0 6px; font-size:10px; border-radius:5px; color:var(--mute); height:18px; }
+  .trims { display:none; margin-top:2px; } .trims.open { display:block; }
+  input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:18px; background:transparent; margin:0; --c:var(--accent); }
+  input[type=range]::-webkit-slider-runnable-track { height:4px; border-radius:2px; background:#2c3240; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--c);
+           margin-top:-5px; border:2px solid var(--panel); box-shadow:0 0 0 1px var(--c); cursor:grab; }
+  input.r { --c:var(--r); } input.g { --c:var(--g); } input.b { --c:var(--b); }
+  ::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:#2b3140; border-radius:4px; }
+  /* setup wizard */
+  #wiz { position:fixed; inset:0; background:#000b; display:none; align-items:center; justify-content:center; z-index:50; }
+  #wiz.open { display:flex; }
+  .card { width:1040px; max-width:96vw; max-height:88vh; background:var(--panel); border:1px solid #3a4152; border-radius:14px; display:flex; flex-direction:column;
+          box-shadow:0 20px 60px #000c; }
+  .card h2 { margin:0; font-size:16px; } .card .top { padding:18px 22px 10px; } .card .top p { margin:4px 0 0; color:var(--mute); }
+  .card .body { padding:6px 22px 14px; overflow:auto; } .card .foot { padding:14px 22px; border-top:1px solid var(--line); display:flex; gap:8px; }
+  .wrow { display:flex; min-height:0; overflow:hidden; } .wrow .body { flex:1; }
+  #wprev { width:380px; padding:6px 22px 14px 0; }
+  #wimg { width:100%; aspect-ratio:16/9; background:#000; border-radius:8px; border:1px solid var(--line); object-fit:cover; display:block; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; }
+  .frm { display:grid; grid-template-columns:120px 1fr; gap:8px 10px; align-items:center; margin-top:10px; }
+  .frm input[type=text], .frm select { width:100%; }
+  .su { display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; margin-top:6px; }
+  .su b { font-weight:600; } .su span { color:var(--mute); font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .su button { padding:0 7px; height:22px; }
+  .inl { display:flex; gap:6px; } .inl input { flex:1; }
+  .wmenu { display:none; margin-top:4px; background:var(--panel2); border:1px solid #3a4152; border-radius:10px; padding:6px; }
+  .wmenu.open { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span><h1>Grade Sheet<span id="openname"></span></h1><span id="status">Loading</span><span class="grow"></span>
+  <button id="setupbtn" title="Open another grade setup, or create a new one">Setups</button>
+  <button id="undo" title="Undo (Ctrl+Z)">Undo</button><button id="redo" title="Redo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
+  <button id="ab" title="Drag the divider on any image: left is before, right is after">Compare before / after</button>
+  <button id="recap">Recapture all</button>
+  <button id="save" class="primary">Save grades</button>
+</header>
+<main>
+  <section id="grid"></section>
+  <div id="busy">
+    <svg viewBox="0 0 320 110" aria-hidden="true">
+      <g class="smoke" fill="#8a92a6"><circle cx="80" cy="76" r="6"/><circle cx="80" cy="76" r="6"/><circle cx="80" cy="76" r="6"/></g>
+      <line class="road" x1="0" y1="96" x2="320" y2="96" stroke="#3a4152" stroke-width="3" stroke-linecap="round"/>
+      <g class="car" transform="translate(70 30)">
+        <rect x="2" y="14" width="26" height="5" rx="2" fill="#ff8a3d"/><rect x="10" y="18" width="5" height="26" fill="#ff8a3d"/>
+        <path d="M14 48 L34 34 L78 30 L96 20 L118 20 Q126 20 130 30 L170 38 L182 48 Z" fill="#ff8a3d"/>
+        <path d="M98 24 L116 24 Q121 24 123 30 L94 30 Z" fill="#161920"/>
+        <rect x="168" y="46" width="22" height="4" rx="2" fill="#e7e9ef"/>
+        <g class="wheel"><circle cx="48" cy="52" r="14" fill="#111" stroke="#5a6274" stroke-width="2"/><path d="M48 40 V64 M36 52 H60" stroke="#8a92a6" stroke-width="2"/></g>
+        <g class="wheel"><circle cx="150" cy="52" r="14" fill="#111" stroke="#5a6274" stroke-width="2"/><path d="M150 40 V64 M138 52 H162" stroke="#8a92a6" stroke-width="2"/></g>
+      </g>
+    </svg>
+    <div id="busytxt">Preparing your views</div><div id="busysub"></div><div id="busybar"><i></i></div>
+  </div>
+  <aside>
+    <div class="sec"><h2 id="camname">-</h2><div class="sub" id="camsub"></div>
+      <div class="dd"><button id="albtn" title="Levels that are visible with this camera. Tick more here if one was missed."><span></span>&#9662;</button><div id="almenu" class="wmenu"></div></div></div>
+    <div class="sec">
+      <div class="btns">
+        <button id="setref">Set as reference</button><button id="match">Match to reference</button>
+      </div>
+      <div class="btns three" style="margin-top:6px">
+        <button id="copy">Copy</button><button id="paste">Paste</button><button id="reset">Reset layer</button>
+      </div>
+      <div class="btns" style="margin-top:6px">
+        <button id="live">View in Unreal</button><button id="eject">Stop viewing</button>
+      </div>
+    </div>
+    <div class="sec">
+      <p class="lbl">Reference image</p>
+      <div class="btns"><button id="refup">Upload image</button><button id="refon">Side by side</button></div>
+      <input type="file" id="reffile" accept="image/*" hidden>
+      <div class="hint" id="refhint"></div>
+    </div>
+    <div class="sec">
+      <p class="lbl">Grade layer</p>
+      <div class="tabs" id="tabs"></div>
+      <div id="maskbox">
+        <p class="lbl sp">Mask by car parts</p>
+        <div class="btns three">
+          <button id="pick">Pick parts</button><button id="show">Show mask</button><button id="clear">Clear</button>
+        </div>
+        <div class="dd"><button id="lvbtn"><span></span>&#9662;</button><div id="lvmenu"></div></div>
+        <div id="parts"></div>
+        <div class="btns"><button id="maskall" class="wide">Use these parts on all cameras</button></div>
+        <p class="lbl sp">Mask by drawn shapes</p>
+        <div class="btns"><button id="drawbtn" class="wide">Draw a shape</button></div>
+        <div id="shapes"></div>
+        <div class="hint" id="maskhint"></div>
+      </div>
+    </div>
+    <div id="sliders"></div>
+  </aside>
+</main>
+<div id="wiz"><div class="card">
+  <div class="top"><h2 id="wtitle"></h2><p id="wsub"></p></div>
+  <div class="wrow"><div class="body" id="wbody"></div>
+    <div id="wprev"><p class="lbl">Live preview from Unreal</p><img id="wimg" alt=""><div class="hint" id="wcap"></div></div></div>
+  <div class="foot"><button id="wcancel">Cancel</button><span class="grow"></span><button id="wback">Back</button><button id="wnext" class="primary">Next</button></div>
+</div></div>
+
+<script>
+"use strict";
+// name, default, master min, master max
+const P = [["Blackpoint",0,-0.25,0.5],["Whitepoint",1,0.25,2],["Lift",0,-0.25,0.25],["Gain",1,0,2],
+           ["Multiply",1,0,3],["Offset",0,-0.25,0.25],["Gamma",1,0.2,3],
+           ["Shadows",1,0,2],["Midtones",1,0,2],["Highlights",1,0,2]];
+const LAYERS = ["Whole frame","Layer A","Layer B","Layer C"];
+const NL = LAYERS.length, TRIM = 0.5, PATCH = 4, MAXID = 32;
+const $ = id => document.getElementById(id);
+// A "setup" is one named grade of one camera (su). A camera tile shows one of its setups (cam.cur).
+// tool: "none" | "pick" | "draw".  shape: index of the selected shape in cur().shapes
+const S = { cams:[], setups:[], parts:[], levels:[], allCams:[], maxCams:8, sel:0, ref:0, layer:0, compare:false, refOn:false, solo:false, wipe:0.5,
+            tool:"none", show:false, clip:null, shape:-1, drawing:false, drag:null, captureId:null, toastUntil:0, waitReload:false };
+
+const defLayer = () => ({ params:Object.fromEntries(P.map(p => [p[0],[p[1],p[1],p[1]]])), mask:[] });
+function normLayers(src) {
+  const out = [];
+  for (let k = 0; k < NL; k++) {
+    const L = defLayer(), s = (src || [])[k] || {};
+    for (const p of P) { const v = (s.params || {})[p[0]]; if (Array.isArray(v) && v.length === 3) L.params[p[0]] = v.map(Number); }
+    L.mask = (s.mask || []).map(Number);
+    out.push(L);
+  }
+  return out;
+}
+const curCam = () => S.cams[S.sel];
+const suOf = cam => cam ? cam.setups[cam.cur] : null;
+const cur = () => suOf(curCam());                       // the setup being edited
+const camOf = su => S.cams.find(c => c.name === su.cam);
+const post = (cmd) => fetch("/cmd", { method:"POST", body:JSON.stringify(cmd) }).catch(() => {});
+function toast(msg) { $("status").textContent = msg; S.toastUntil = Date.now() + 2500; }
+const hasShape = (su, k) => su.shapes.some(s => s.layer === k && s.closed);
+const payload = su => su.layers.map((L, k) => ({ params:L.params, mask:L.mask, shape:k > 0 && hasShape(su, k) }));
+// every setup that is on together with su: the camera's always-on setups whose level is active, plus su itself.
+// Variant setups (paint codes) are never on together, so another variant is not included.
+const chainOf = su => S.setups.filter(p => p.cam === su.cam && (p === su || (!p.variant && su.levels.includes(p.target)))).sort((a, b) => a.order - b.order);
+
+// ---------------------------------------------------------------- grade math (same as M_NukeGrade)
+function gradeCh(x, p, c) {
+  let den = p.Whitepoint[c] - p.Blackpoint[c];
+  if (Math.abs(den) < 1e-5) den = 1e-5;
+  const a = p.Multiply[c] * (p.Gain[c] - p.Lift[c]) / den;
+  const b = p.Offset[c] + p.Lift[c] - a * p.Blackpoint[c];
+  return Math.pow(Math.max(a * x + b, 0), 1 / Math.max(p.Gamma[c], 1e-3));
+}
+// grade + tonal ranges (shadows / midtones / highlights weighted by the graded luminance, like Nuke ColorCorrect)
+function gradeRGB(rgb, p) {
+  const g = rgb.map((x, c) => gradeCh(x, p, c));
+  const l = Math.min(1, Math.max(0, 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2]));
+  const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const ws = 1 - ss(0, 0.35, l), wh = ss(0.55, 1, l), wm = 1 - ws - wh;
+  return g.map((v, c) => v * (ws * p.Shadows[c] + wm * p.Midtones[c] + wh * p.Highlights[c]));
+}
+// mask of layer k at a pixel: (parts, if chosen) x (shapes, if drawn); 0 if the layer has neither
+function layerMask(su, k, id, sv) {
+  const up = su.layers[k].mask.length > 0, us = hasShape(su, k);
+  if (!up && !us) return 0;
+  return (up ? (su.layers[k].mask.includes(id) ? 1 : 0) : 1) * (us ? sv[k - 1] : 1);
+}
+function gradeSetup(su, rgb, id, sv) {
+  let g = gradeRGB(rgb, su.layers[0].params);
+  for (let k = 1; k < NL; k++) { const m = layerMask(su, k, id, sv);
+    if (m > 0) { const gk = gradeRGB(g, su.layers[k].params); g = g.map((v, c) => v + (gk[c] - v) * m); } }
+  return g;
+}
+
+// ---------------------------------------------------------------- WebGL (one context per camera tile)
+const VS = `#version 300 es
+in vec2 p; out vec2 v; void main(){ v = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
+const FS = `#version 300 es
+precision highp float;
+in vec2 v; out vec4 o;
+uniform sampler2D uImg; uniform sampler2D uId; uniform sampler2D uShape; uniform sampler2D uRaw;
+uniform sampler2D uRef; uniform vec4 uRefFit; uniform int uLeft;
+uniform vec3 uP[40]; uniform float uMask[96]; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
+vec3 grade(vec3 x, int k){
+  int b = k * 10;
+  vec3 den = uP[b+1] - uP[b];
+  den = mix(vec3(1e-5), den, step(vec3(1e-5), abs(den)));
+  vec3 A = uP[b+4] * (uP[b+3] - uP[b+2]) / den;
+  vec3 B = uP[b+5] + uP[b+2] - A * uP[b];
+  vec3 y = pow(max(A * x + B, vec3(0.)), 1. / max(uP[b+6], vec3(1e-3)));
+  float l = clamp(dot(y, vec3(.2126, .7152, .0722)), 0., 1.);
+  float ws = 1. - smoothstep(0., .35, l), wh = smoothstep(.55, 1., l);
+  return y * (ws * uP[b+7] + (1. - ws - wh) * uP[b+8] + wh * uP[b+9]);
+}
+float lmask(int k, int id, vec3 s){
+  float up = uUse[(k-1)*2], us = uUse[(k-1)*2+1];
+  return mix(1., uMask[(k-1)*32+id], up) * mix(1., s[k-1], us) * max(up, us);
+}
+void main(){
+  if (v.x < uWipe) {                                   // left of the divider: the ungraded capture, or the reference image
+    if (uLeft == 1) { vec2 r = (v - uRefFit.zw) / uRefFit.xy;
+      o = (r.x < 0. || r.x > 1. || r.y < 0. || r.y > 1.) ? vec4(0., 0., 0., 1.) : vec4(texture(uRef, r).rgb, 1.); }
+    else o = vec4(texture(uRaw, v).rgb, 1.);
+    return;
+  }
+  vec3 c = texture(uImg, v).rgb;
+  int id = int(texture(uId, v).r * 255. + .5);
+  if (id > 31) id = 0;
+  vec3 s = texture(uShape, v).rgb;
+  vec3 g = grade(c, 0);
+  for (int k = 1; k < 4; k++) g = mix(g, grade(g, k), lmask(k, id, s));
+  if (uShow > 0) g = mix(g, vec3(1., .25, .8), lmask(uShow, id, s) * .5);
+  o = vec4(g, 1.);
+}`;
+function mkTex(gl, filter) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,0,0,255])); return t;
+}
+function initGL(cam) {
+  const gl = cam.canvas.getContext("webgl2", { premultipliedAlpha:false, antialias:false });
+  if (!gl) return;
+  const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+    if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(x)); return x; };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(pr); gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(pr, "p");
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+  cam.gl = gl; cam.u = {};
+  for (const n of ["uImg","uId","uShape","uRaw","uRef","uRefFit","uLeft","uP","uMask","uUse","uShow","uWipe"]) cam.u[n] = gl.getUniformLocation(pr, n);
+  gl.uniform1i(cam.u.uImg, 0); gl.uniform1i(cam.u.uId, 1); gl.uniform1i(cam.u.uShape, 2); gl.uniform1i(cam.u.uRaw, 3); gl.uniform1i(cam.u.uRef, 4);
+  cam.fbo = [0, 1].map(() => ({ fb:gl.createFramebuffer(), tex:mkTex(gl, gl.LINEAR), w:0, h:0 }));   // for stacked setups
+  for (const su of cam.setups) su.tex = { img:mkTex(gl, gl.LINEAR), id:mkTex(gl, gl.NEAREST), mask:mkTex(gl, gl.LINEAR), ref:mkTex(gl, gl.LINEAR) };
+}
+function upload(cam, tex, src) {
+  const gl = cam.gl; if (!gl) return;
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+}
+function draw(cam) {
+  const gl = cam.gl, su = suOf(cam); if (!gl || !su || !su.px) return;
+  if (cam.canvas.width !== su.w || cam.canvas.height !== su.h) { cam.canvas.width = su.w; cam.canvas.height = su.h; }
+  const chain = chainOf(su), bind = (unit, tex) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); };
+  for (const f of cam.fbo) if (chain.length > 1 && (f.w !== su.w || f.h !== su.h)) {
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, f.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, su.w, su.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f.fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, f.tex, 0);
+    f.w = su.w; f.h = su.h; }
+  chain.forEach((pp, i) => {                     // one pass per active setup, each with its own grade and masks
+    const last = i === chain.length - 1;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, last ? null : cam.fbo[i % 2].fb);
+    gl.viewport(0, 0, su.w, su.h);
+    bind(0, i === 0 ? su.tex.img : cam.fbo[(i - 1) % 2].tex); bind(1, su.tex.id); bind(2, pp.tex.mask); bind(3, su.tex.img); bind(4, su.tex.ref);
+    const up = new Float32Array(NL * P.length * 3), um = new Float32Array(96), uu = new Float32Array(6);
+    pp.layers.forEach((L, k) => {
+      P.forEach((p, j) => up.set(L.params[p[0]], (k * P.length + j) * 3));
+      if (!k) return;
+      for (const id of L.mask) if (id >= 0 && id < MAXID) um[(k - 1) * 32 + id] = 1;
+      uu[(k - 1) * 2] = L.mask.length ? 1 : 0; uu[(k - 1) * 2 + 1] = hasShape(pp, k) ? 1 : 0;
+    });
+    gl.uniform3fv(cam.u.uP, up); gl.uniform1fv(cam.u.uMask, um); gl.uniform1fv(cam.u.uUse, uu);
+    // the divider is a screen position; the image may be zoomed and panned, so convert it to an image position
+    const useRef = S.refOn && !!su.refW, vw = cam.view || { z:1, x:0, y:0 };
+    gl.uniform1f(cam.u.uWipe, last && (S.compare || useRef) ? (S.wipe - .5 - vw.x) / vw.z + .5 : -1);
+    gl.uniform1i(cam.u.uLeft, useRef ? 1 : 0);
+    if (useRef) { const a = su.w / su.h, rr = su.refW / su.refH, sx = rr > a ? 1 : rr / a, sy = rr > a ? a / rr : 1;   // fit the reference inside the frame
+      gl.uniform4f(cam.u.uRefFit, sx, sy, (1 - sx) / 2, (1 - sy) / 2); }
+    gl.uniform1i(cam.u.uShow, (pp === su && cam === curCam() && S.layer > 0 && (S.show || S.tool === "pick")) ? S.layer : 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  });
+}
+const drawAll = () => S.cams.forEach(draw);
+
+// ---------------------------------------------------------------- images (one capture per setup)
+function loadImg(url) {
+  return new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; });
+}
+function pixels(img) {
+  const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const x = c.getContext("2d", { willReadFrequently:true }); x.drawImage(img, 0, 0);
+  return x.getImageData(0, 0, c.width, c.height);
+}
+async function loadImages() {
+  const bust = "?t=" + Date.now();
+  await Promise.all(S.setups.map(async su => {
+    const cam = camOf(su); if (!cam) return;          // a camera that is not part of the open setup
+    const [img, idImg] = await Promise.all([loadImg("/img/" + su.id + ".png" + bust), loadImg("/img/" + su.id + "_id.png" + bust)]);
+    su.px = su.idpx = null;
+    if (img) {
+      su.w = img.naturalWidth; su.h = img.naturalHeight;
+      su.px = pixels(img).data; upload(cam, su.tex.img, img);
+      if (!su.patch) su.patch = [su.w >> 1, su.h >> 1];
+    }
+    if (idImg && img && idImg.naturalWidth === su.w) { su.idpx = pixels(idImg).data; upload(cam, su.tex.id, idImg); }
+    rasterize(su);
+    const ref = await loadImg("/img/ref_" + su.id + ".png" + bust); if (ref) setRef(su, ref);
+  }));
+  refresh();
+  for (const c of S.cams) c.canvas.animate([{ opacity:.25 }, { opacity:1 }], { duration:260, easing:"ease-out" });   // new captures fade in
+}
+function setRef(su, src) { su.refW = src.naturalWidth || src.width; su.refH = src.naturalHeight || src.height; upload(camOf(su), su.tex.ref, src); }
+const idAt = (su, x, y) => su.idpx ? su.idpx[(y * su.w + x) * 4] : 0;
+function patchRaw(su) {
+  if (!su.px) return null;
+  const [px, py] = su.patch, s = [0, 0, 0]; let n = 0;
+  for (let y = Math.max(0, py - PATCH); y <= Math.min(su.h - 1, py + PATCH); y++)
+    for (let x = Math.max(0, px - PATCH); x <= Math.min(su.w - 1, px + PATCH); x++) {
+      const i = (y * su.w + x) * 4; s[0] += su.px[i]; s[1] += su.px[i + 1]; s[2] += su.px[i + 2]; n++;
+    }
+  return s.map(v => v / n / 255);
+}
+function patchGraded(su) {
+  let g = patchRaw(su); if (!g) return null;
+  const [x, y] = su.patch, id = idAt(su, x, y);
+  for (const pp of chainOf(su)) g = gradeSetup(pp, g, id, shapeAt(pp, x, y));
+  return g.map(v => Math.min(1, v));
+}
+
+// ---------------------------------------------------------------- drawn shapes
+// shape = { layer, feather (px at capture size), closed, pts:[{x,y, ix,iy, ox,oy}] }  (handles are offsets)
+function pathD(s) {
+  const p = s.pts; if (!p.length) return "";
+  let d = "M" + p[0].x + " " + p[0].y;
+  const seg = (a, b) => " C" + (a.x + a.ox) + " " + (a.y + a.oy) + " " + (b.x + b.ix) + " " + (b.y + b.iy) + " " + b.x + " " + b.y;
+  for (let i = 1; i < p.length; i++) d += seg(p[i - 1], p[i]);
+  if (s.closed && p.length > 1) d += seg(p[p.length - 1], p[0]) + " Z";
+  return d;
+}
+// all shapes of a setup -> one RGB mask image (R = layer A, G = B, B = C), feather = blur
+function rasterize(su) {
+  if (!su.mask) { su.mask = document.createElement("canvas"); su.mctx = su.mask.getContext("2d", { willReadFrequently:true }); }
+  const c = su.mask, x = su.mctx;
+  if (c.width !== su.w || c.height !== su.h) { c.width = su.w; c.height = su.h; }
+  x.globalCompositeOperation = "source-over"; x.filter = "none"; x.fillStyle = "#000"; x.fillRect(0, 0, c.width, c.height);
+  x.globalCompositeOperation = "lighter";
+  for (const s of su.shapes) { if (!s.closed || s.pts.length < 3) continue;
+    x.filter = s.feather > 0 ? "blur(" + s.feather + "px)" : "none";
+    x.fillStyle = ["#f00", "#0f0", "#00f"][s.layer - 1]; x.fill(new Path2D(pathD(s))); }
+  x.filter = "none"; x.globalCompositeOperation = "source-over";
+  upload(camOf(su), su.tex.mask, c);
+}
+function shapeAt(su, x, y) {
+  if (!su.mctx || !su.shapes.length) return [0, 0, 0];
+  const d = su.mctx.getImageData(x, y, 1, 1).data; return [d[0] / 255, d[1] / 255, d[2] / 255];
+}
+</script>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- shape overlay + editing
+const scaleOf = cam => suOf(cam).w / Math.max(1, cam.canvas.getBoundingClientRect().width);     // image px per screen px
+function renderOverlay(cam) {
+  const su = suOf(cam); let h = "";
+  if (su && cam === curCam() && S.layer > 0) {
+    const r = 4.5 * scaleOf(cam);
+    su.shapes.forEach((s, i) => { if (s.layer !== S.layer) return;
+      const sel = i === S.shape;
+      h += '<path class="' + (sel ? "sel" : "") + '" d="' + pathD(s) + '"/>';
+      if (!sel) return;
+      for (const p of s.pts) {
+        if (p.ix || p.iy) h += '<line x1="' + p.x + '" y1="' + p.y + '" x2="' + (p.x + p.ix) + '" y2="' + (p.y + p.iy) + '"/><circle class="h" r="' + r * .8 + '" cx="' + (p.x + p.ix) + '" cy="' + (p.y + p.iy) + '"/>';
+        if (p.ox || p.oy) h += '<line x1="' + p.x + '" y1="' + p.y + '" x2="' + (p.x + p.ox) + '" y2="' + (p.y + p.oy) + '"/><circle class="h" r="' + r * .8 + '" cx="' + (p.x + p.ox) + '" cy="' + (p.y + p.oy) + '"/>';
+      }
+      for (const p of s.pts) h += '<circle r="' + r + '" cx="' + p.x + '" cy="' + p.y + '"/>';
+    });
+  }
+  if (su) cam.svg.setAttribute("viewBox", "0 0 " + su.w + " " + su.h);
+  cam.svg.innerHTML = h;
+  cam.el.querySelector(".cv").classList.toggle("draw", cam === curCam() && S.tool === "draw");
+}
+// what is under the cursor on the selected shape: an anchor, a handle, or nothing
+function hitShape(cam, x, y) {
+  const s = suOf(cam).shapes[S.shape]; if (!s || s.layer !== S.layer) return null;
+  const r = 9 * scaleOf(cam), near = (px, py) => Math.hypot(px - x, py - y) < r;
+  for (let i = 0; i < s.pts.length; i++) { const p = s.pts[i];
+    if ((p.ox || p.oy) && near(p.x + p.ox, p.y + p.oy)) return { kind:"out", i };
+    if ((p.ix || p.iy) && near(p.x + p.ix, p.y + p.iy)) return { kind:"in", i }; }
+  for (let i = 0; i < s.pts.length; i++) if (near(s.pts[i].x, s.pts[i].y)) return { kind:"anchor", i };
+  return null;
+}
+function shapeUnder(su, x, y) {
+  for (let i = su.shapes.length - 1; i >= 0; i--) { const s = su.shapes[i];
+    if (s.layer === S.layer && s.closed && su.mctx.isPointInPath(new Path2D(pathD(s)), x, y)) return i; }
+  return -1;
+}
+function cancelDraw() {
+  if (S.drawing && cur()) { cur().shapes = cur().shapes.filter(s => s.closed); S.shape = -1; }
+  S.drawing = false; S.drag = null; if (S.tool === "draw") S.tool = "none";
+}
+function closeShape() {
+  const su = cur(), s = su.shapes[S.shape]; if (!s) return;
+  const n = s.pts.length;
+  if (n > 1 && Math.hypot(s.pts[n - 1].x - s.pts[n - 2].x, s.pts[n - 1].y - s.pts[n - 2].y) < 3) s.pts.pop();   // double-click duplicate
+  if (s.pts.length < 3) return toast("A shape needs at least 3 points");
+  s.closed = true; S.drawing = false; S.tool = "none";
+  commitShapes(su); syncPanel(); toast("Shape added to " + LAYERS[S.layer]);
+}
+function deleteShape(i) {
+  const su = cur(); su.shapes.splice(i, 1); S.shape = -1; commitShapes(su); syncPanel();
+}
+let rafPending = false;
+function liveShapes(su) {           // while dragging: redraw at most once per frame
+  if (rafPending) return; rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; rasterize(su); refresh(); });
+}
+const maskTimers = {};
+function commitShapes(su) {         // after an edit: redraw, then send the mask image and the shapes to Unreal
+  rasterize(su); refresh(); pushSoon();
+  clearTimeout(maskTimers[su.id]);
+  maskTimers[su.id] = setTimeout(() => {
+    su.mask.toBlob(b => fetch("/mask/" + su.id, { method:"POST", body:b }).catch(() => {}), "image/png");
+    post({ op:"shapes", id:su.id, shapes:su.shapes.filter(s => s.closed) });
+  }, 350);
+}
+
+// ---------------------------------------------------------------- tiles (one per camera)
+function buildTiles() {
+  const grid = $("grid"); grid.innerHTML = "";
+  grid.style.gridTemplateColumns = "repeat(" + (S.cams.length <= 1 ? 1 : S.cams.length <= 4 ? 2 : 3) + ", minmax(0, 1fr))";
+  S.cams.forEach((cam, i) => {
+    const el = document.createElement("div"); el.className = "tile";
+    el.innerHTML = '<div class="cv"><div class="zw"><canvas width="16" height="9"></canvas><svg preserveAspectRatio="none"></svg><div class="patch"></div></div>' +
+      '<div class="empty">No capture yet. Press Recapture all.</div>' +
+      '<div class="wipe"><span class="wl">Before</span><span class="wr">After</span><i></i></div>' +
+      '<div class="tools"><button class="fit" title="Back to the whole image">Fit</button>' +
+      '<button class="full" title="Work on this camera alone. Click again (or press F) for all cameras.">Full view</button></div>' +
+      '<span class="badge">MATCH TARGET</span></div>' +
+      '<div class="meta"><b></b><span class="sus"></span><span class="grow"></span><span class="sw"></span>' +
+      '<span class="num rgb"></span><span class="num diff"></span></div>';
+    el.querySelector("b").textContent = cam.name;
+    const sus = el.querySelector(".sus"); sus.style.display = "none";
+    cam.setups.forEach((su, j) => { const c = document.createElement("span"); c.className = "chip"; c.textContent = su.name;
+      c.title = (su.variant ? "Variant setup: on only with its variant" : "Always on") + "\nGrade lives in " + su.target + "\nActive levels: " + su.levels.join(", ");
+      c.onclick = e => { e.stopPropagation(); cancelDraw(); cam.cur = j; S.shape = -1; S.sel = i; syncPanel(); refresh(); }; sus.appendChild(c); });
+    grid.appendChild(el);
+    cam.el = el; cam.canvas = el.querySelector("canvas"); cam.svg = el.querySelector("svg");
+    initGL(cam);
+    const cv = el.querySelector(".cv"), wp = el.querySelector(".wipe");
+    wp.addEventListener("pointerdown", e => { e.stopPropagation(); wp.setPointerCapture(e.pointerId); wp.dragging = true; });
+    wp.addEventListener("pointermove", e => { if (!wp.dragging) return; const r = cv.getBoundingClientRect();
+      S.wipe = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      S.cams.forEach(c => { c.el.querySelector(".wipe").style.left = S.wipe * 100 + "%"; }); drawAll(); });
+    const wend = e => { wp.dragging = false; e.stopPropagation(); };
+    wp.addEventListener("pointerup", wend); wp.addEventListener("pointercancel", wend);
+    wp.addEventListener("click", e => e.stopPropagation()); wp.addEventListener("dblclick", e => e.stopPropagation());
+    // zoom (mouse wheel) and pan (middle-drag, or left-drag on "Whole frame") - the reference and the viewer move together
+    cam.view = { z:1, x:0, y:0 };
+    const zw = el.querySelector(".zw"), fit = el.querySelector(".fit");
+    const applyView = () => { const w = cam.view; if (w.z <= 1.001) { w.z = 1; w.x = w.y = 0; }
+      const lim = (w.z - 1) / 2; w.x = Math.min(lim, Math.max(-lim, w.x)); w.y = Math.min(lim, Math.max(-lim, w.y));
+      zw.style.transition = pan ? "none" : "transform .1s ease-out";
+      zw.style.transform = "translate(" + w.x * 100 + "%," + w.y * 100 + "%) scale(" + w.z + ")";
+      fit.style.display = w.z > 1 ? "inline-block" : "none"; draw(cam); renderOverlay(cam); };
+    fit.onclick = e => { e.stopPropagation(); cam.view.z = 1; applyView(); };
+    const tools = el.querySelector(".tools");
+    for (const t of ["pointerdown", "click", "dblclick"]) tools.addEventListener(t, e => e.stopPropagation());
+    el.querySelector(".full").onclick = () => toggleSolo(i);
+    cv.addEventListener("wheel", e => { e.preventDefault(); const r = cv.getBoundingClientRect(), w = cam.view;
+      const fx = (e.clientX - r.left) / r.width - .5, fy = (e.clientY - r.top) / r.height - .5;
+      const z = Math.min(16, Math.max(1, w.z * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+      w.x = fx - (fx - w.x) / w.z * z; w.y = fy - (fy - w.y) / w.z * z; w.z = z; applyView(); }, { passive:false });
+    let pan = null;
+    cv.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
+    cv.addEventListener("pointerdown", e => { if (cam.view.z <= 1 || !(e.button === 1 || (e.button === 0 && !S.layer && i === S.sel))) return;
+      pan = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener("pointermove", e => { if (!pan) return; const r = cv.getBoundingClientRect();
+      cam.view.x += (e.clientX - pan[0]) / r.width; cam.view.y += (e.clientY - pan[1]) / r.height; pan = [e.clientX, e.clientY]; applyView(); });
+    const pend = () => { pan = null; }; cv.addEventListener("pointerup", pend); cv.addEventListener("pointercancel", pend);
+    const pos = e => { const r = cam.canvas.getBoundingClientRect(), su = suOf(cam);
+      return [Math.min(su.w - 1, Math.max(0, (e.clientX - r.left) / r.width * su.w)),
+              Math.min(su.h - 1, Math.max(0, (e.clientY - r.top) / r.height * su.h))]; };
+    cv.addEventListener("pointerdown", e => {
+      if (e.button !== 0) return;
+      if (i !== S.sel) return select(i);                 // first click on another camera only selects it
+      const su = suOf(cam);
+      if (!S.layer || !su || !su.px) return;
+      const [x, y] = pos(e);
+      if (S.tool === "draw") {
+        if (!S.drawing) { su.shapes.push({ layer:S.layer, feather:20, closed:false, pts:[] }); S.shape = su.shapes.length - 1; S.drawing = true; }
+        const s = su.shapes[S.shape];
+        if (s.pts.length >= 3 && Math.hypot(s.pts[0].x - x, s.pts[0].y - y) < 10 * scaleOf(cam)) return closeShape();
+        s.pts.push({ x, y, ix:0, iy:0, ox:0, oy:0 });
+        S.drag = { kind:"out", i:s.pts.length - 1, last:[x, y] };
+      } else {
+        const hit = hitShape(cam, x, y);
+        if (hit) S.drag = { ...hit, last:[x, y] };
+        else { const u = shapeUnder(su, x, y);
+          if (u >= 0) { S.shape = u; S.drag = { kind:"move", last:[x, y] }; syncPanel(); }
+          else if (S.tool === "pick") { if (!su.idpx) return toast("Recapture first to enable picking");
+            return toggleId(idAt(su, Math.floor(x), Math.floor(y))); }
+          else if (S.shape >= 0) { S.shape = -1; syncPanel(); } }
+      }
+      if (S.drag) cv.setPointerCapture(e.pointerId);
+      renderOverlay(cam);
+    });
+    cv.addEventListener("pointermove", e => {
+      const d = S.drag, su = suOf(cam), s = su && su.shapes[S.shape]; if (!d || !s || cam !== curCam()) return;
+      const [x, y] = pos(e), dx = x - d.last[0], dy = y - d.last[1]; d.last = [x, y]; d.moved = true;
+      if (d.kind === "move") for (const p of s.pts) { p.x += dx; p.y += dy; }
+      else { const p = s.pts[d.i];
+        if (d.kind === "anchor") { p.x += dx; p.y += dy; }
+        else if (d.kind === "out") { p.ox = x - p.x; p.oy = y - p.y; if (!e.altKey) { p.ix = -p.ox; p.iy = -p.oy; } }
+        else { p.ix = x - p.x; p.iy = y - p.y; if (!e.altKey) { p.ox = -p.ix; p.oy = -p.iy; } } }
+      renderOverlay(cam); if (s.closed) liveShapes(su);
+    });
+    const end = () => { const d = S.drag, su = suOf(cam); S.drag = null;
+      if (d && d.moved && su && su.shapes[S.shape] && su.shapes[S.shape].closed) commitShapes(su); };
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+    cv.addEventListener("dblclick", e => {
+      if (i !== S.sel || !S.layer) return;
+      if (S.drawing) return closeShape();
+      const hit = hitShape(cam, ...pos(e)); if (!hit || hit.kind !== "anchor") return;
+      const su = suOf(cam), s = su.shapes[S.shape], n = s.pts.length, p = s.pts[hit.i];
+      if (p.ox || p.oy || p.ix || p.iy) p.ix = p.iy = p.ox = p.oy = 0;              // smooth -> corner
+      else { const a = s.pts[(hit.i + n - 1) % n], b = s.pts[(hit.i + 1) % n];        // corner -> smooth
+        p.ox = (b.x - a.x) / 6; p.oy = (b.y - a.y) / 6; p.ix = -p.ox; p.iy = -p.oy; }
+      commitShapes(su);
+    });
+    el.querySelector(".meta").addEventListener("click", () => select(i));
+    el.addEventListener("contextmenu", e => { e.preventDefault(); const su = suOf(cam);
+      if (!su || !su.px || e.target.closest(".cv") !== cv) return;
+      const [x, y] = pos(e);
+      if (i === S.sel && S.layer && !S.drawing) { const hit = hitShape(cam, x, y);
+        if (hit && hit.kind === "anchor") { const s = su.shapes[S.shape]; s.pts.splice(hit.i, 1);
+          if (s.pts.length < 3) return deleteShape(S.shape); return commitShapes(su); } }
+      su.patch = [Math.floor(x), Math.floor(y)]; refresh(); });
+  });
+}
+// short animated change between layouts (falls back to an instant change)
+const smooth = fn => { if (document.startViewTransition) document.startViewTransition(fn); else fn(); };
+function toggleSolo(i) { smooth(() => { if (S.sel !== i) { cancelDraw(); S.shape = -1; S.sel = i; } S.solo = !S.solo; syncPanel(); refresh(); }); }
+function showBusy(on, st) {
+  $("busy").classList.toggle("on", !!on); if (!on) return;
+  const pr = (st && st.progress) || [0, 0];
+  $("busytxt").textContent = "Preparing your views";
+  $("busysub").textContent = st && st.busy && st.status ? st.status + (pr[1] ? "  (" + Math.min(pr[0] + 1, pr[1]) + " of " + pr[1] + ")" : "") : "Setting up in Unreal";
+  $("busybar").firstChild.style.width = (pr[1] ? Math.max(6, pr[0] / pr[1] * 100) : 6) + "%";
+}
+function refresh() {
+  $("grid").classList.toggle("solo", S.solo);                  // full view: the selected camera fills the sheet
+  S.cams.forEach((cam, i) => { cam.el.style.display = S.solo && i !== S.sel ? "none" : "";
+    cam.el.querySelector(".full").textContent = S.solo ? "All cameras" : "Full view"; });
+  drawAll();
+  const refSu = suOf(S.cams[S.ref]), ref = refSu ? patchGraded(refSu) : null;
+  S.cams.forEach((cam, i) => {
+    const su = suOf(cam);
+    cam.el.classList.toggle("sel", i === S.sel); cam.el.classList.toggle("ref", i === S.ref);
+    [...cam.el.querySelectorAll(".sus .chip")].forEach((c, j) => c.classList.toggle("on", j === cam.cur));
+    cam.el.querySelector(".empty").style.display = su && su.px ? "none" : "flex";
+    renderOverlay(cam);
+    const useRef = S.refOn && su && !!su.refW, wpe = cam.el.querySelector(".wipe");
+    wpe.style.display = (S.compare || useRef) && su && su.px ? "block" : "none"; wpe.style.left = S.wipe * 100 + "%";
+    wpe.querySelector(".wl").textContent = useRef ? "Reference" : "Before"; wpe.querySelector(".wr").textContent = useRef ? "Viewer" : "After";
+    const g = su ? patchGraded(su) : null, pt = cam.el.querySelector(".patch");
+    pt.style.display = g ? "block" : "none";
+    if (!g) { cam.el.querySelector(".rgb").textContent = ""; cam.el.querySelector(".diff").textContent = ""; return; }
+    pt.style.left = (su.patch[0] + .5) / su.w * 100 + "%"; pt.style.top = (su.patch[1] + .5) / su.h * 100 + "%";
+    const v = g.map(x => Math.round(x * 255));
+    cam.el.querySelector(".sw").style.background = "rgb(" + v.join(",") + ")";
+    cam.el.querySelector(".rgb").textContent = v.join(" ");
+    const d = cam.el.querySelector(".diff");
+    if (i === S.ref || !ref) { d.textContent = ""; }
+    else { const dv = v.map((x, c) => x - Math.round(ref[c] * 255));
+      d.textContent = "Δ " + dv.map(x => (x > 0 ? "+" : "") + x).join(" ");
+      d.className = "num diff " + (Math.max(...dv.map(Math.abs)) <= 2 ? "ok" : "bad"); }
+  });
+  syncOutputs();
+}
+document.addEventListener("keydown", e => {
+  if ($("wiz").classList.contains("open") || (e.target.tagName === "INPUT" && e.target.type === "text")) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") { e.preventDefault(); return e.shiftKey ? redoStep() : undoStep(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); return redoStep(); }
+  if (e.target.tagName === "INPUT") return;
+  if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !e.altKey && cur()) return toggleSolo(S.sel);     // F = full view on / off
+  if (e.key === "Enter" && S.drawing) closeShape();
+  else if (e.key === "Escape") { cancelDraw(); syncPanel(); refresh(); }
+  else if ((e.key === "Delete" || e.key === "Backspace") && S.shape >= 0 && !S.drawing) deleteShape(S.shape);
+});
+</script>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- side panel
+const rows = {};
+function buildPanel() {
+  const tabs = $("tabs");
+  LAYERS.forEach((n, k) => { const b = document.createElement("button"); b.textContent = n;
+    b.onclick = () => { cancelDraw(); S.layer = k; S.shape = -1; if (!k) S.tool = "none"; syncPanel(); refresh(); }; tabs.appendChild(b); });
+  const box = $("sliders");
+  for (const [name, def, lo, hi] of P) {
+    if (name === "Shadows") { const h = document.createElement("p"); h.className = "lbl sp"; h.textContent = "Tonal ranges"; box.appendChild(h); }
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = '<div class="rh"><span class="nm" title="Double-click to reset">' + name + '</span>' +
+      '<button class="rgbbtn" title="Per-channel trim">RGB</button><output></output>' +
+      '<button class="rst" title="Reset this control (or Ctrl+click the slider)">&#8634;</button></div>' +
+      '<input type="range" class="m" min="' + lo + '" max="' + hi + '" step="0.005">' +
+      '<div class="trims">' + ["r","g","b"].map(c => '<input type="range" class="' + c + '" min="' + (-TRIM) + '" max="' + TRIM + '" step="0.005">').join("") + '</div>';
+    box.appendChild(row);
+    const r = rows[name] = { m:row.querySelector(".m"), t:[...row.querySelectorAll(".trims input")], out:row.querySelector("output"),
+                             trims:row.querySelector(".trims") };
+    const onIn = () => { if (!cur()) return;
+      const m = +r.m.value; cur().layers[S.layer].params[name] = r.t.map(t => m + +t.value); refresh(); pushSoon(); };
+    r.m.addEventListener("input", onIn); r.t.forEach(t => t.addEventListener("input", onIn));
+    row.querySelector(".rgbbtn").onclick = () => r.trims.classList.toggle("open");
+    const resetParam = () => { if (!cur()) return; cur().layers[S.layer].params[name] = [def, def, def]; syncPanel(); refresh(); pushSoon(); };
+    row.querySelector(".nm").ondblclick = resetParam; row.querySelector(".rst").onclick = resetParam;
+    r.m.addEventListener("pointerdown", e => { if (e.ctrlKey) { e.preventDefault(); resetParam(); } });                 // Ctrl+click: back to default
+    r.t.forEach(t => t.addEventListener("pointerdown", e => { if (!e.ctrlKey || !cur()) return; e.preventDefault();      // Ctrl+click a trim: remove the trims
+      const m = +r.m.value; cur().layers[S.layer].params[name] = [m, m, m]; syncPanel(); refresh(); pushSoon(); }));
+  }
+}
+function syncOutputs() {
+  const su = cur(); if (!su) return;
+  for (const [name] of P) { const v = su.layers[S.layer].params[name], r = rows[name];
+    const same = Math.abs(v[0] - v[1]) < 5e-4 && Math.abs(v[1] - v[2]) < 5e-4;
+    r.out.textContent = same ? v[0].toFixed(3) : v.map(x => x.toFixed(2)).join("  "); }
+}
+// active levels of the open setup for this camera: tick or untick, then apply (the camera is recaptured)
+function levelEditor() {
+  const su = cur(), menu = $("almenu"); if (!su) return;
+  if (!S.al || S.al.id !== su.id) S.al = { id:su.id, levels:S.levels.map(l => l.name).filter(l => su.levels.includes(l)) };
+  const ed = S.al, dirty = [...ed.levels].sort().join() !== [...su.levels].sort().join();
+  $("albtn").firstChild.textContent = "Active levels: " + (ed.levels.join(", ") || "none");
+  menu.innerHTML = "";
+  for (const l of S.levels) { const row = el("label", "ck"), cb = el("input"); cb.type = "checkbox";
+    cb.checked = ed.levels.includes(l.name); cb.disabled = l.name === su.target;
+    cb.onchange = () => { const set = new Set(ed.levels); if (cb.checked) set.add(l.name); else set.delete(l.name);
+      ed.levels = S.levels.map(a => a.name).filter(a => set.has(a)); levelEditor(); };
+    row.append(cb, l.name, el("small", "", l.name === su.target ? "grade lives here" : "")); menu.appendChild(row); }
+  const ap = el("button", "primary", "Apply and recapture this camera"); ap.style.width = "100%"; ap.style.marginTop = "6px"; ap.disabled = !dirty;
+  ap.onclick = () => { su.levels = [...ed.levels]; post({ op:"levels", id:su.id, levels:su.levels }); menu.classList.remove("open"); syncPanel(); toast("Recapturing " + su.cam); };
+  menu.appendChild(ap);
+}
+function syncPanel() {
+  const su = cur(); if (!su) return;
+  const under = chainOf(su).filter(p => p !== su).map(p => p.name);
+  $("camname").textContent = su.cam + " / " + su.name;
+  $("camsub").textContent = "Grade lives in " + su.target + (under.length ? ". Also on with it: " + under.join(", ") : "");
+  levelEditor();
+  $("refon").classList.toggle("on", S.refOn); $("refup").textContent = su.refW ? "Replace image" : "Upload image";
+  $("refhint").textContent = !su.refW ? "No reference for " + su.cam + " yet." :
+    S.refOn ? "Drag the divider. Scroll to zoom, middle-drag to pan; both sides move together. Press All cameras on the image to see every camera again." :
+    "A reference is loaded for " + su.cam + ". Turn on Side by side to compare.";
+  [...$("tabs").children].forEach((b, k) => b.classList.toggle("on", k === S.layer));
+  const L = su.layers[S.layer];
+  for (const [name] of P) { const v = L.params[name], r = rows[name], m = (v[0] + v[1] + v[2]) / 3;
+    r.m.value = m; r.t.forEach((t, c) => t.value = v[c] - m);
+    if (v.some(x => Math.abs(x - m) > 5e-4)) r.trims.classList.add("open"); }
+  $("maskbox").style.display = S.layer ? "block" : "none";
+  $("pick").classList.toggle("on", S.tool === "pick"); $("show").classList.toggle("on", S.show);
+  $("drawbtn").classList.toggle("on", S.tool === "draw");
+  $("drawbtn").textContent = S.tool === "draw" ? "Drawing... (Enter to finish, Esc to cancel)" : "Draw a shape";
+  // level dropdown: tick any levels; "Background" is everything that is not a stencil part
+  const menu = $("lvmenu"), picked = []; menu.innerHTML = "";
+  const item = (label, ids, note) => { const all = ids.every(i => L.mask.includes(i)); if (all) picked.push(label);
+    const row = document.createElement("label"), cb = document.createElement("input"), sm = document.createElement("small");
+    row.className = "ck"; cb.type = "checkbox"; cb.checked = all; sm.textContent = note;
+    cb.onchange = () => { for (const i of ids) { const k = L.mask.indexOf(i); if (!cb.checked) { if (k >= 0) L.mask.splice(k, 1); } else if (k < 0) L.mask.push(i); }
+      syncPanel(); refresh(); pushSoon(); };
+    row.append(cb, label, sm); menu.appendChild(row); };
+  for (const name of [...new Set(S.parts.map(p => p.level || "level"))]) { const ids = S.parts.filter(p => (p.level || "level") === name).map(p => p.id);
+    item(name, ids, ids.length + " parts"); }
+  item("Background", [0], "everything else");
+  $("lvbtn").firstChild.textContent = picked.length ? "Levels: " + picked.join(", ") : "Levels: none ticked";
+  const parts = $("parts"); parts.innerHTML = "";
+  for (const p of S.parts) { const c = document.createElement("span");
+    c.className = "chip" + (L.mask.includes(p.id) ? " on" : ""); c.textContent = p.name.replace(/_\d+$/, "");
+    c.title = p.name + " (stencil " + p.id + ")"; c.onclick = () => toggleId(p.id); parts.appendChild(c); }
+  const list = $("shapes"); list.innerHTML = ""; let n = 0;
+  su.shapes.forEach((s, i) => { if (s.layer !== S.layer || !s.closed) return; n++;
+    const row = document.createElement("div"); row.className = "shape" + (i === S.shape ? " sel" : "");
+    row.innerHTML = '<span class="nm">Shape ' + n + '</span><input type="range" min="0" max="150" step="1" title="Feather">' +
+      '<span class="num"></span><button title="Delete shape">&times;</button>';
+    const sl = row.querySelector("input"), num = row.querySelector(".num");
+    sl.value = s.feather; num.textContent = s.feather + " px";
+    sl.oninput = () => { s.feather = +sl.value; num.textContent = s.feather + " px"; liveShapes(su); };
+    sl.onchange = () => commitShapes(su);
+    sl.onclick = e => e.stopPropagation();
+    row.querySelector("button").onclick = e => { e.stopPropagation(); deleteShape(i); };
+    row.onclick = () => { S.shape = i; S.tool = "none"; syncPanel(); refresh(); };
+    list.appendChild(row); });
+  const hasP = L.mask.length > 0, hasS = n > 0;
+  $("maskhint").textContent = S.tool === "draw" ? "Click to add points. Click and drag for a curve. Click the first point, double-click or press Enter to close." :
+    S.tool === "pick" ? "Click parts in the selected image to add or remove them." :
+    S.shape >= 0 ? "Drag points or handles (Alt = break handle). Double-click a point: corner / smooth. Right-click a point: delete. Drag inside: move." :
+    hasP && hasS ? "This layer grades the chosen parts, only inside the shapes." :
+    hasP ? "This layer grades the chosen parts." : hasS ? "This layer grades inside the shapes. Feather is the slider on each shape." :
+    "Empty mask: choose parts and/or draw a shape, otherwise this layer changes nothing.";
+  syncOutputs();
+}
+function select(i) { if (i !== S.sel) { cancelDraw(); S.shape = -1; } S.sel = i; syncPanel(); refresh(); }
+function toggleId(id) {
+  const m = cur().layers[S.layer].mask, k = m.indexOf(id);
+  if (k < 0) m.push(id); else m.splice(k, 1);
+  syncPanel(); refresh(); pushSoon();
+}
+const pushTimers = {};          // one pending send per setup, so switching quickly never drops one
+// ---- undo / redo: a snapshot of every grade and shape in the open setup, one step per mouse gesture
+let hist = [], redo = [], lastSnap = null, gestureOpen = false, gesturePushed = false;
+const ser = () => JSON.stringify(S.setups.filter(su => camOf(su)).map(su => [su.id, su.layers, su.shapes.filter(s => s.closed)]));
+function histReset() { hist = []; redo = []; lastSnap = ser(); }
+function noteChange() {
+  const now = ser(); if (lastSnap === null || now === lastSnap) return;
+  if (!(gestureOpen && gesturePushed)) { hist.push(lastSnap); if (hist.length > 200) hist.shift(); redo = []; gesturePushed = true; }
+  lastSnap = now;
+}
+document.addEventListener("pointerdown", () => { gestureOpen = true; gesturePushed = false; }, true);
+document.addEventListener("pointerup", () => { gestureOpen = false; }, true);
+function sendShapes(su) { clearTimeout(maskTimers[su.id]); maskTimers[su.id] = setTimeout(() => {
+  su.mask.toBlob(b => fetch("/mask/" + su.id, { method:"POST", body:b }).catch(() => {}), "image/png");
+  post({ op:"shapes", id:su.id, shapes:su.shapes.filter(s => s.closed) }); }, 350); }
+function applySnap(json) {
+  for (const [id, layers, shapes] of JSON.parse(json)) { const su = S.setups.find(s => s.id === id); if (!su) continue;
+    const sc = JSON.stringify(su.shapes.filter(s => s.closed)) !== JSON.stringify(shapes), lc = JSON.stringify(su.layers) !== JSON.stringify(layers);
+    su.layers = layers; if (sc) { su.shapes = shapes; rasterize(su); sendShapes(su); }
+    if (lc || sc) post({ op:"set", id:su.id, layers:payload(su) }); }
+  S.drawing = false; S.drag = null; S.shape = -1; if (S.tool === "draw") S.tool = "none";
+  lastSnap = ser(); syncPanel(); refresh();
+}
+function undoStep() { if (!hist.length) return toast("Nothing to undo"); redo.push(ser()); applySnap(hist.pop()); toast("Undo"); }
+function redoStep() { if (!redo.length) return toast("Nothing to redo"); hist.push(ser()); applySnap(redo.pop()); toast("Redo"); }
+function pushSoon() { const su = cur(); if (!su) return; noteChange(); clearTimeout(pushTimers[su.id]);
+  pushTimers[su.id] = setTimeout(() => post({ op:"set", id:su.id, layers:payload(su) }), 120); }
+const clone = x => JSON.parse(JSON.stringify(x));
+function changed(msg) { syncPanel(); refresh(); pushSoon(); toast(msg); }
+
+// ---------------------------------------------------------------- actions
+const need = fn => () => { if (cur()) fn(); };
+$("setref").onclick = need(() => { S.ref = S.sel; refresh(); toast(cur().cam + " is the reference"); });
+$("match").onclick = need(() => {
+  const su = cur(), refSu = suOf(S.cams[S.ref]);
+  if (S.sel === S.ref) return toast("Select a camera other than the reference");
+  const target = patchGraded(refSu); if (!target || !su.px) return;
+  const L = su.layers[S.layer], [px, py] = su.patch;
+  if (S.layer && layerMask(su, S.layer, idAt(su, px, py), shapeAt(su, px, py)) < 0.05) return toast("The sample patch is outside this layer's mask");
+  for (let n = 0; n < 24; n++) { const now = patchGraded(su);
+    for (let c = 0; c < 3; c++) if (now[c] > 1e-4 && target[c] > 1e-4)
+      L.params.Multiply[c] = Math.min(8, Math.max(0, L.params.Multiply[c] * Math.pow(target[c] / now[c], Math.max(L.params.Gamma[c], 1e-3)))); }
+  changed(su.cam + " matched to " + refSu.cam);
+});
+$("copy").onclick = need(() => { S.clip = clone(cur().layers); toast("Copied grades from " + cur().name); });
+$("paste").onclick = need(() => { if (S.clip) { cur().layers = clone(S.clip); changed("Pasted onto " + cur().name); } });
+$("reset").onclick = need(() => { const m = cur().layers[S.layer].mask; cur().layers[S.layer] = defLayer(); cur().layers[S.layer].mask = m;
+  changed(LAYERS[S.layer] + " reset"); });
+$("live").onclick = need(() => { post({ op:"pilot", id:cur().id }); toast("Viewing " + cur().cam + " / " + cur().name + " in Unreal"); });
+$("eject").onclick = () => post({ op:"eject" });
+// reference image: one per camera of the open setup, kept in Saved/GradeCaptures so it is there next time
+$("refup").onclick = need(() => $("reffile").click());
+$("reffile").onchange = async e => { const f = e.target.files[0], su = cur(); e.target.value = ""; if (!f || !su) return;
+  const im = await loadImg(URL.createObjectURL(f)); if (!im) return toast("That file is not an image");
+  const k = Math.min(1, 2560 / Math.max(im.naturalWidth, im.naturalHeight)), c = document.createElement("canvas");
+  c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k); c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+  setRef(su, c); S.refOn = true; S.solo = true; syncPanel(); refresh(); toast("Reference added for " + su.cam);
+  c.toBlob(b => fetch("/ref/" + su.id, { method:"POST", body:b }).catch(() => {}), "image/png"); };
+$("refon").onclick = need(() => { if (!cur().refW) return toast("Upload a reference image for this camera first");
+  smooth(() => { S.refOn = !S.refOn; if (S.refOn) S.solo = true; syncPanel(); refresh(); }); });
+$("pick").onclick = need(() => { cancelDraw(); S.tool = S.tool === "pick" ? "none" : "pick"; S.shape = -1; syncPanel(); refresh(); });
+$("drawbtn").onclick = need(() => { if (S.tool === "draw") cancelDraw(); else { S.tool = "draw"; S.shape = -1; } syncPanel(); refresh(); });
+$("show").onclick = need(() => { S.show = !S.show; syncPanel(); refresh(); });
+$("clear").onclick = need(() => { cur().layers[S.layer].mask = []; changed("Parts cleared"); });
+$("maskall").onclick = need(() => { const m = cur().layers[S.layer].mask;
+  S.cams.forEach(c => { const o = suOf(c); o.layers[S.layer].mask = [...m]; post({ op:"set", id:o.id, layers:payload(o) }); }); noteChange();
+  syncPanel(); refresh(); toast("Parts copied to all cameras"); });
+$("ab").onclick = () => { S.compare = !S.compare; $("ab").classList.toggle("on", S.compare); refresh(); };
+$("lvbtn").onclick = e => { e.stopPropagation(); $("lvmenu").classList.toggle("open"); };
+$("albtn").onclick = e => { e.stopPropagation(); $("almenu").classList.toggle("open"); };
+document.addEventListener("click", e => { if (!e.target.closest(".dd")) { $("lvmenu").classList.remove("open"); $("almenu").classList.remove("open");
+  if (W && W.menuOpen && $("wiz").classList.contains("open")) { W.menuOpen = false; renderWizard(); } } });
+$("undo").onclick = () => undoStep(); $("redo").onclick = () => redoStep();
+$("recap").onclick = () => { post({ op:"capture", ids:S.cams.map(c => suOf(c).id) }); toast("Capture requested"); };
+$("save").onclick = () => { post({ op:"save", grades:Object.fromEntries(S.setups.map(su => [su.id, payload(su)])) }); toast("Saving"); };
+window.addEventListener("resize", () => S.cams.forEach(renderOverlay));
+</script>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- start screen (list of setups) and the new-setup wizard
+// A grade setup has a NAME (for example Overall, or a variant such as W3T) and covers one or more cameras.
+// W.mode: "list" -> "name" -> "cams" -> "cam" (one page per camera)
+let W = null;
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const lvlOf = cam => (S.allCams.find(c => c.name === cam) || {}).level;
+const setupNames = () => [...new Set(S.setups.map(s => s.name))];
+const plain = s => ({ cam:s.cam, name:s.name, levels:[...s.levels], target:s.target, override:!!s.override, variant:!!s.variant, variants:{ ...(s.variants || {}) } });
+function protectedOk(level) {                 // base or read-only level: warn, and let the user override
+  const info = S.levels.find(l => l.name === level) || {};
+  if (!info.base && !info.readonly) return { ok:true, override:false };
+  const why = info.base ? "is a base level" : "is read-only (not checked out)";
+  return { ok:confirm(level + " " + why + ".\nGrades are normally kept out of it.\n\nAdd this grade there anyway?"), override:true };
+}
+function openList() { W = { mode:"list", msg:"", pkey:null, pid:-1 }; $("wiz").classList.add("open"); renderWizard(); }
+function closeWizard() { $("wiz").classList.remove("open"); post({ op:"eject" }); }
+function openSetup(name) { sessionStorage.setItem("gradeOpen", name); location.reload(); }
+function sendConfig(setups, openName) {
+  const used = new Set(setups.map(s => s.cam));
+  post({ op:"config", cameras:S.allCams.map(c => c.name).filter(c => used.has(c)), setups });
+  if (openName) sessionStorage.setItem("gradeOpen", openName); else sessionStorage.removeItem("gradeOpen");
+  $("wiz").classList.remove("open"); S.waitReload = true; S.waitSince = Date.now(); toast("Building and capturing"); showBusy(true, null);
+}
+function startNew() { W = { mode:"name", name:"", variant:false, variants:{}, cams:[], entries:{}, step:0, msg:"", pkey:null, pid:-1 }; renderWizard(); }
+function startEdit(name) {
+  const mine = S.setups.filter(s => s.name === name);
+  W = { mode:"cams", editing:true, name, variant:mine.some(s => s.variant), variants:{ ...((mine[0] || {}).variants || {}) }, cams:S.allCams.map(c => c.name).filter(c => mine.some(s => s.cam === c)),
+        entries:Object.fromEntries(mine.map(s => [s.cam, { levels:[...s.levels], target:s.target, override:!!s.override }])), step:0, msg:"", pkey:null, pid:-1 };
+  renderWizard();
+}
+function initForm(cam) {
+  // an existing entry is kept; otherwise the combination chosen for the previous camera carries over
+  // (with that camera's own level swapped for this one's); otherwise nothing is ticked
+  const own = lvlOf(cam), have = new Set(S.levels.map(l => l.name)), e = W.entries[cam];
+  const levels = e ? [...e.levels] : W.last ? [...new Set(W.last.levels.map(l => l === W.last.own ? own : l))].filter(l => have.has(l)) : [];
+  W.form = { cam, levels, target:e ? e.target : levels.includes(own) ? own : (levels[0] || "") };
+}
+function saveForm() {                         // the page of one camera -> W.entries
+  const f = W.form;
+  if (!f.levels.length || !f.levels.includes(f.target)) { W.msg = "Tick the active levels and choose the level the grade lives in."; return false; }
+  const old = W.entries[f.cam], pr = old && old.target === f.target && old.override ? { ok:true, override:true } : protectedOk(f.target);
+  if (!pr.ok) { W.msg = "Choose another level for the grade."; return false; }
+  W.entries[f.cam] = { levels:[...f.levels], target:f.target, override:pr.override };
+  W.last = { levels:[...f.levels], own:lvlOf(f.cam) }; W.msg = "";
+  return true;
+}
+function finishWizard() {
+  const others = S.setups.filter(s => s.name !== W.name).map(plain);
+  const mine = W.cams.filter(c => W.entries[c]).map(c => ({ cam:c, name:W.name, variant:W.variant || Object.keys(W.variants).length > 0, variants:W.variants, ...W.entries[c] }));
+  sendConfig(others.concat(mine), W.name);
+}
+function allCameras() {                       // same combination for every camera, each camera's own level swapped in
+  const f = W.form, own = lvlOf(f.cam);
+  if (!saveForm()) return renderWizard();
+  if (f.target !== own) { W.msg = "For all cameras at once, the grade has to live in each camera's own level (here " + own + "). A grade in " + f.target + " is already active for every camera that uses that level."; return renderWizard(); }
+  for (const cam of W.cams) { const o = lvlOf(cam); if (!o || cam === f.cam) continue;
+    const pr = protectedOk(o); if (!pr.ok) continue;
+    W.entries[cam] = { levels:[...new Set(f.levels.map(l => l === own ? o : l))], target:o, override:pr.override }; }
+  finishWizard();
+}
+function renderWizard() {
+  const body = $("wbody"); body.innerHTML = "";
+  const show = (id, on) => { $(id).style.display = on ? "" : "none"; };
+  show("wprev", W.mode === "cams" || W.mode === "cam"); show("wback", W.mode !== "list"); show("wcancel", W.mode !== "list" || !!S.open);
+  $("wcancel").textContent = W.mode === "list" ? "Close" : "Cancel";
+  if (W.mode === "list") {
+    $("wtitle").textContent = "Grade setups"; $("wsub").textContent = "Open a setup to work on it, or create a new one.";
+    $("wnext").textContent = "Create new";
+    const names = setupNames();
+    if (!names.length) body.appendChild(el("div", "hint", "No grade setups yet. Create the first one, for example Overall."));
+    for (const name of names) { const mine = S.setups.filter(s => s.name === name);
+      const row = el("div", "su" + (name === S.open ? " cur" : "")), open = el("button", "primary", "Open"), edit = el("button", "", "Cameras and levels"), x = el("button", "", "×");
+      row.append(el("b", "", name), el("span", "", (Object.keys(mine[0].variants).length ? Object.entries(mine[0].variants).map(([k, v]) => k + ": " + v).join(", ") : mine.some(s => s.variant) ? "variant" : "always on") + "  |  " + mine.map(s => s.cam).join(", ")));
+      open.onclick = () => openSetup(name); edit.onclick = () => startEdit(name); x.title = "Delete this setup";
+      x.onclick = () => { if (confirm("Delete " + name + "? Its grades are removed from " + mine.length + " camera level(s).")) sendConfig(S.setups.filter(s => s.name !== name).map(plain), S.open === name ? null : S.open); };
+      row.append(open, edit, x); body.appendChild(row); }
+  } else if (W.mode === "name") {
+    $("wtitle").textContent = "New grade setup"; $("wsub").textContent = "What is this grade for? It appears under this name in the list.";
+    $("wnext").textContent = "Next";
+    const frm = el("div", "frm"), name = el("input"); name.type = "text"; name.value = W.name; name.placeholder = "for example Overall, or a variant such as W3T";
+    name.oninput = () => { W.name = name.value; };
+    frm.append(el("span", "", "Name"), name); body.appendChild(frm);
+    if (S.variantSets.length) {               // one pick list per variant table; pick from as many tables as you need
+      for (const vs of S.variantSets) { const sel = el("select"), none = el("option", "", "Any (not tied to this table)"); none.value = ""; sel.appendChild(none);
+        for (const v of vs.variants) { const o = el("option", "", v); o.value = v; o.selected = W.variants[vs.name] === v; sel.appendChild(o); }
+        sel.onchange = () => { const auto = !W.name.trim() || W.name === Object.values(W.variants).join("_");
+          if (sel.value) W.variants[vs.name] = sel.value; else delete W.variants[vs.name];
+          if (auto) W.name = Object.values(W.variants).join("_"); renderWizard(); };
+        frm.append(el("span", "", vs.name), sel); }
+      body.appendChild(el("div", "hint", Object.keys(W.variants).length
+        ? "This grade is only on with " + Object.entries(W.variants).map(([k, v]) => k + " = " + v).join(" and ") + ". The car is switched to it for the capture."
+        : "Nothing picked from the variant tables: this grade is always on (an overall grade)."));
+    } else {
+      const vr = el("label", "ck"), vcb = el("input"); vcb.type = "checkbox"; vcb.checked = W.variant; vcb.onchange = () => { W.variant = vcb.checked; };
+      vr.style.padding = "0"; vr.append(vcb, "Only for one variant. No variant tables were found, so name it exactly like the variant.");
+      frm.append(el("span", "", "Variant"), vr);
+    }
+    setTimeout(() => name.focus(), 0);
+  } else if (W.mode === "cams") {
+    $("wtitle").textContent = W.name + ": choose cameras";
+    $("wsub").textContent = "Up to " + S.maxCams + " cameras. Each one becomes a view in the contact sheet.";
+    $("wnext").textContent = "Next";
+    const box = el("div", "two"); body.appendChild(box);
+    if (!S.allCams.length) box.appendChild(el("div", "hint", "No cine cameras found in the level."));
+    for (const c of S.allCams) { const row = el("label", "ck"), cb = el("input");
+      cb.type = "checkbox"; cb.checked = W.cams.includes(c.name);
+      cb.onchange = () => { W.pcam = c.name; const set = new Set(W.cams); if (cb.checked) set.add(c.name); else set.delete(c.name);
+        if (set.size > S.maxCams) { cb.checked = false; W.msg = "At most " + S.maxCams + " cameras."; return renderWizard(); }
+        W.cams = S.allCams.map(a => a.name).filter(a => set.has(a)); W.msg = ""; renderWizard(); };
+      row.append(cb, c.name, el("small", "", c.level)); box.appendChild(row); }
+  } else {
+    const cam = W.cams[W.step], n = W.cams.length;
+    if (!W.form || W.form.cam !== cam) initForm(cam);
+    const f = W.form, own = lvlOf(cam);
+    $("wtitle").textContent = W.name + ": " + cam + "  (" + (W.step + 1) + " of " + n + ")";
+    $("wsub").textContent = "Tick the levels that are active with this camera. Only these are shown with it. Then choose the one level the grade lives in.";
+    $("wnext").textContent = W.step === n - 1 ? "Done" : "Next";
+    const frm = el("div", "frm"); body.appendChild(frm);
+    const dd = el("div", "dd"), ddb = el("button"), menu = el("div", "wmenu" + (W.menuOpen ? " open" : ""));
+    dd.style.marginTop = "0"; ddb.append(el("span", "", f.levels.length ? f.levels.join(", ") : "Choose levels..."), "▾");
+    ddb.onclick = e => { e.stopPropagation(); W.menuOpen = !W.menuOpen; menu.classList.toggle("open", W.menuOpen); };
+    for (const l of S.levels) { const row = el("label", "ck"), cb = el("input"); cb.type = "checkbox"; cb.checked = f.levels.includes(l.name);
+      cb.onchange = () => { const set = new Set(f.levels); if (cb.checked) set.add(l.name); else set.delete(l.name);
+        f.levels = S.levels.map(a => a.name).filter(a => set.has(a));
+        if (!f.levels.includes(f.target)) f.target = f.levels.includes(own) ? own : (f.levels[0] || ""); renderWizard(); };
+      const note = l.base ? "base" : l.readonly ? "read-only" : l.name === own ? "this camera" : "";
+      row.append(cb, l.name, el("small", l.base || l.readonly ? "warn" : "", note)); menu.appendChild(row); }
+    dd.append(ddb, menu); frm.append(el("span", "", "Active levels"), dd);
+    const sel = el("select");
+    for (const l of f.levels) { const o = el("option", "", l); o.value = l; o.selected = l === f.target; sel.appendChild(o); }
+    sel.onchange = () => { f.target = sel.value; };
+    frm.append(el("span", "", "Grade lives in"), sel);
+    if (n > 1) { const all = el("button", "", "Use this combination for all " + n + " cameras and finish"); all.onclick = allCameras;
+      all.title = "Each camera gets the same levels, with its own camera level swapped in"; frm.append(el("span"), all); }
+  }
+  if (W.msg) { const m = el("div", "hint", W.msg); m.style.color = "var(--warn)"; body.appendChild(m); }
+  wizPreview();
+}
+// live preview: Unreal looks through the camera with only the ticked levels visible, and sends back a picture
+let prevTimer = 0;
+function wizPreview(hoverCam) {
+  if (!W || !$("wiz").classList.contains("open") || (W.mode !== "cams" && W.mode !== "cam")) return;
+  const cam = W.mode === "cams" ? (hoverCam || W.pcam || W.cams[W.cams.length - 1] || (S.allCams[0] || {}).name) : W.form.cam;
+  const levels = W.mode === "cams" ? null : W.form.levels;
+  const key = JSON.stringify([cam, levels]); if (!cam || key === W.pkey) return;
+  W.pkey = key; W.pcam = cam; W.pwait = true;
+  W.ptext = cam + (levels ? (levels.length ? " with " + levels.join(", ") : " with no levels ticked") : " with EVERY level (levels are chosen on the next page)");
+  $("wcap").textContent = "Updating: " + W.ptext + "..."; $("wimg").style.opacity = .3;       // dim the old picture until the new one arrives
+  clearTimeout(prevTimer); prevTimer = setTimeout(() => post({ op:"preview", cam, levels, key }), 150);
+}
+setInterval(async () => {
+  if (!W || !$("wiz").classList.contains("open") || !W.pwait) return;
+  const st = await getJSON("/state"); if (!st || st.preview_id === W.pid || st.preview_key !== W.pkey) return;   // only a picture made for this request
+  W.pid = st.preview_id;
+  const im = new Image();
+  im.onload = () => { $("wimg").src = im.src; $("wimg").style.opacity = 1; W.pwait = false; $("wcap").textContent = "Showing: " + W.ptext; };
+  im.src = "/img/preview.png?t=" + Date.now();
+}, 500);
+$("setupbtn").onclick = openList;
+$("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
+$("wback").onclick = () => { W.msg = "";
+  if (W.mode === "cam") { if (W.step > 0) W.step--; else W.mode = "cams"; }
+  else if (W.mode === "cams") { if (W.editing) return openList(); W.mode = "name"; }
+  else return openList();
+  renderWizard(); };
+$("wnext").onclick = () => {
+  if (W.mode === "list") return startNew();
+  if (W.mode === "name") { const name = W.name.trim();
+    if (!name) { W.msg = "Give the setup a name."; return renderWizard(); }
+    if (setupNames().some(x => x.toLowerCase() === name.toLowerCase())) { W.msg = "There is already a setup called " + name + ". Open it from the list instead."; return renderWizard(); }
+    W.name = name; W.mode = "cams"; W.msg = ""; return renderWizard(); }
+  if (W.mode === "cams") { if (!W.cams.length) { W.msg = "Tick at least one camera."; return renderWizard(); }
+    W.mode = "cam"; W.step = 0; W.form = null; W.msg = ""; return renderWizard(); }
+  if (!saveForm()) return renderWizard();
+  if (W.step === W.cams.length - 1) return finishWizard();
+  W.step++; renderWizard();
+};
+
+// ---------------------------------------------------------------- start + polling
+async function getJSON(url) { try { const r = await fetch(url + "?t=" + Date.now()); return r.ok ? await r.json() : null; } catch (e) { return null; } }
+async function poll() {
+  const st = await getJSON("/state");
+  if (st) {
+    if (Date.now() > S.toastUntil) $("status").textContent = st.status || (S.cams.length + " cameras");
+    $("recap").disabled = !!st.busy; showBusy(st.busy || S.waitReload, st);
+    if (S.waitReload) { if (!st.busy && Date.now() - S.waitSince > 2500) return location.reload(); }
+    else if (!st.busy && (st.setups || []).map(s => s.id).join() !== S.setups.map(s => s.id).join()) return location.reload();   // setups changed elsewhere
+    else if (S.captureId !== null && st.capture_id !== S.captureId) { S.captureId = st.capture_id; await loadImages(); syncPanel(); }
+  }
+  setTimeout(poll, 600);
+}
+(async function start() {
+  let st = null;
+  for (let n = 0; n < 20 && !st; n++) { st = await getJSON("/state"); if (!st) await new Promise(r => setTimeout(r, 250)); }
+  st = st || {};
+  S.parts = st.parts || []; S.levels = st.levels || []; S.allCams = st.all_cameras || []; S.maxCams = st.max_cams || 8;
+  S.variantSets = st.variant_sets || []; S.captureId = st.capture_id || 0;
+  S.setups = (st.setups || []).map(s => ({ id:s.id, name:s.name, cam:s.cam, levels:s.levels || [], target:s.target, order:s.order || 0,
+                                           override:!!s.override, variant:!!s.variant, variants:s.variants || {}, layers:normLayers(s.layers), shapes:(s.shapes || []).filter(x => x.closed), w:1280, h:720 }));
+  const want = sessionStorage.getItem("gradeOpen");
+  S.open = setupNames().includes(want) ? want : null;               // the setup being worked on; none = show the list
+  S.cams = S.open ? (st.cameras || []).map(n => { const mine = S.setups.filter(s => s.cam === n).sort((a, b) => a.order - b.order);
+      return { name:n, setups:mine, cur:mine.findIndex(s => s.name === S.open) }; }).filter(c => c.cur >= 0) : [];
+  $("openname").textContent = S.open || "";
+  buildPanel(); buildTiles();
+  if (S.cams.length) { await loadImages(); select(0); histReset(); }
+  else { $("status").textContent = "Choose a setup"; $("camname").textContent = "No setup open"; openList(); }
+  setInterval(() => fetch("/ping").catch(() => {}), 2000); fetch("/ping").catch(() => {});
+  poll();
+})();
+</script>
+</body>
+</html>
