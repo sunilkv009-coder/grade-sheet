@@ -232,7 +232,7 @@ const P = [["Blackpoint",0,-0.25,0.5],["Whitepoint",1,0.25,2],["Lift",0,-0.25,0.
            ["Multiply",1,0,3],["Offset",0,-0.25,0.25],["Gamma",1,0.2,3],
            ["Shadows",1,0,2],["Midtones",1,0,2],["Highlights",1,0,2]];
 const LAYERS = ["Whole frame","Layer A","Layer B","Layer C"];
-const NL = LAYERS.length, TRIM = 0.5, PATCH = 4, MAXID = 32;
+const NL = LAYERS.length, TRIM = 0.5, PATCH = 4, MAXID = 256;
 const $ = id => document.getElementById(id);
 // A "setup" is one named grade of one camera (su). A camera tile shows one of its setups (cam.cur).
 // tool: "none" | "pick" | "draw".  shape: index of the selected shape in cur().shapes
@@ -299,7 +299,7 @@ precision highp float;
 in vec2 v; out vec4 o;
 uniform sampler2D uImg; uniform sampler2D uId; uniform sampler2D uShape; uniform sampler2D uRaw;
 uniform sampler2D uRef; uniform vec4 uRefFit; uniform int uLeft;
-uniform vec3 uP[40]; uniform float uMask[96]; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
+uniform vec3 uP[40]; uniform sampler2D uLut; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
 vec3 grade(vec3 x, int k){
   int b = k * 10;
   vec3 den = uP[b+1] - uP[b];
@@ -311,9 +311,9 @@ vec3 grade(vec3 x, int k){
   float ws = 1. - smoothstep(0., .35, l), wh = smoothstep(.55, 1., l);
   return y * (ws * uP[b+7] + (1. - ws - wh) * uP[b+8] + wh * uP[b+9]);
 }
-float lmask(int k, int id, vec3 s){
+float lmask(int k, vec3 m, vec3 s){
   float up = uUse[(k-1)*2], us = uUse[(k-1)*2+1];
-  return mix(1., uMask[(k-1)*32+id], up) * mix(1., s[k-1], us) * max(up, us);
+  return mix(1., m[k-1], up) * mix(1., s[k-1], us) * max(up, us);
 }
 void main(){
   if (v.x < uWipe) {                                   // left of the divider: the ungraded capture, or the reference image
@@ -324,11 +324,11 @@ void main(){
   }
   vec3 c = texture(uImg, v).rgb;
   int id = int(texture(uId, v).r * 255. + .5);
-  if (id > 31) id = 0;
+  vec3 m = texelFetch(uLut, ivec2(id, 0), 0).rgb;     // which layers use this stencil ID
   vec3 s = texture(uShape, v).rgb;
   vec3 g = grade(c, 0);
-  for (int k = 1; k < 4; k++) g = mix(g, grade(g, k), lmask(k, id, s));
-  if (uShow > 0) g = mix(g, vec3(1., .25, .8), lmask(uShow, id, s) * .5);
+  for (int k = 1; k < 4; k++) g = mix(g, grade(g, k), lmask(k, m, s));
+  if (uShow > 0) g = mix(g, vec3(1., .25, .8), lmask(uShow, m, s) * .5);
   o = vec4(g, 1.);
 }`;
 function mkTex(gl, filter) {
@@ -353,8 +353,9 @@ function initGL(cam) {
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   cam.gl = gl; cam.u = {};
-  for (const n of ["uImg","uId","uShape","uRaw","uRef","uRefFit","uLeft","uP","uMask","uUse","uShow","uWipe"]) cam.u[n] = gl.getUniformLocation(pr, n);
-  gl.uniform1i(cam.u.uImg, 0); gl.uniform1i(cam.u.uId, 1); gl.uniform1i(cam.u.uShape, 2); gl.uniform1i(cam.u.uRaw, 3); gl.uniform1i(cam.u.uRef, 4);
+  for (const n of ["uImg","uId","uShape","uRaw","uRef","uRefFit","uLeft","uP","uLut","uUse","uShow","uWipe"]) cam.u[n] = gl.getUniformLocation(pr, n);
+  gl.uniform1i(cam.u.uImg, 0); gl.uniform1i(cam.u.uId, 1); gl.uniform1i(cam.u.uShape, 2); gl.uniform1i(cam.u.uRaw, 3); gl.uniform1i(cam.u.uRef, 4); gl.uniform1i(cam.u.uLut, 5);
+  cam.lut = mkTex(gl, gl.NEAREST);
   cam.fbo = [0, 1].map(() => ({ fb:gl.createFramebuffer(), tex:mkTex(gl, gl.LINEAR), w:0, h:0 }));   // for stacked setups
   for (const su of cam.setups) su.tex = { img:mkTex(gl, gl.LINEAR), id:mkTex(gl, gl.NEAREST), mask:mkTex(gl, gl.LINEAR), ref:mkTex(gl, gl.LINEAR) };
 }
@@ -377,14 +378,14 @@ function draw(cam) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, last ? null : cam.fbo[i % 2].fb);
     gl.viewport(0, 0, su.w, su.h);
     bind(0, i === 0 ? su.tex.img : cam.fbo[(i - 1) % 2].tex); bind(1, su.tex.id); bind(2, pp.tex.mask); bind(3, su.tex.img); bind(4, su.tex.ref);
-    const up = new Float32Array(NL * P.length * 3), um = new Float32Array(96), uu = new Float32Array(6);
+    const up = new Float32Array(NL * P.length * 3), um = new Uint8Array(MAXID * 4), uu = new Float32Array(6);
     pp.layers.forEach((L, k) => {
       P.forEach((p, j) => up.set(L.params[p[0]], (k * P.length + j) * 3));
       if (!k) return;
-      for (const id of L.mask) if (id >= 0 && id < MAXID) um[(k - 1) * 32 + id] = 1;
+      for (const id of L.mask) if (id >= 0 && id < MAXID) um[id * 4 + k - 1] = 255;
       uu[(k - 1) * 2] = L.mask.length ? 1 : 0; uu[(k - 1) * 2 + 1] = hasShape(pp, k) ? 1 : 0;
     });
-    gl.uniform3fv(cam.u.uP, up); gl.uniform1fv(cam.u.uMask, um); gl.uniform1fv(cam.u.uUse, uu);
+    gl.uniform3fv(cam.u.uP, up); bind(5, cam.lut); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, MAXID, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, um); gl.uniform1fv(cam.u.uUse, uu);
     // the divider is a screen position; the image may be zoomed and panned, so convert it to an image position
     const useRef = S.refOn && !!su.refW, vw = cam.view || { z:1, x:0, y:0 };
     gl.uniform1f(cam.u.uWipe, last && (S.compare || useRef) ? (S.wipe - .5 - vw.x) / vw.z + .5 : -1);

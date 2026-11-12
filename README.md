@@ -23,8 +23,11 @@ Plugin* and *Editor Scripting Utilities* for you.
 
 ## First use
 
-1. **Grade Sheet > Assign part IDs to meshes** (once per project). Gives every mesh in your sublevels a stencil ID
-   per material, so grades can be masked by part. A level with `_base` in its name, or a read-only level, asks first.
+1. **Grade Sheet > Assign part IDs to meshes** (only if your meshes have no stencil IDs yet). Existing stencil IDs
+   are never changed: a mesh that already has a stencil value or renders custom depth is left as it is, and its ID
+   shows up in the panel as a part. Meshes with no ID get new ones per material, taken only from numbers nothing in
+   the open levels uses. It tells you the counts and asks before changing anything; a level with `_base` in its
+   name, or a read-only level, asks again.
 2. **Grade Sheet > Open Grade Sheet**. A window opens with the list of grade setups.
 3. **Create new**: name the setup, optionally tie it to variants from your Variant Manager tables, tick the cameras
    (up to 8), then for each camera tick the levels that are active with it and choose the one level the grade lives
@@ -67,6 +70,6 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 - Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
 - Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil
   Pass** to *Enabled with Stencil*.
-- One stencil ID per mesh (its first material), and 24 part groups per project.
+- Part masks read whatever stencil IDs the meshes have (1 to 255). The tool never rewrites an existing ID.
 - Part-mask edges are not anti-aliased. Drawn shapes belong to one camera's framing.
 - The window is served from your own machine only (`127.0.0.1`) and opens in Edge or Chrome as an app window.

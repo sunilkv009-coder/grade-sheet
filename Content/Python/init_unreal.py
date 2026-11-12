@@ -49,7 +49,7 @@ def register():
         sub.add_menu_entry("Main", _entry("GradeSheetOpen", "Open Grade Sheet",
                                           "Choose cameras and levels, then grade every camera side by side", "grade_panel.py"))
         sub.add_menu_entry("Main", _entry("GradeSheetStencils", "Assign part IDs to meshes",
-                                          "Give meshes a stencil ID per material, so grades can be masked by part",
+                                          "Give meshes that have no stencil ID a new one per material. Existing stencil IDs are never changed",
                                           "grade_stencils.py"))
     bar = menus.find_menu("LevelEditor.LevelEditorToolBar.User")
     if bar:

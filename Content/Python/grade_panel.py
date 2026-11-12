@@ -22,7 +22,8 @@ SETTLE_SEC, SHOT_SEC, ID_SEC = 4.0, 2.5, 1.0
 PARAM_NAMES = ["Blackpoint", "Whitepoint", "Lift", "Gain", "Multiply", "Offset", "Gamma",
                "Shadows", "Midtones", "Highlights"]
 PREFIXES = ["", "L1_", "L2_", "L3_"]
-MAX_ID, MAX_CAMS = 24, 8
+MAX_ID, MAX_CAMS = 255, 8
+WORDS = ["Mask"] + ["Mask%d" % j for j in range(1, 11)]   # 24 stencil IDs per scalar: IDs 1-24, 25-48, ... 241-255
 CAP_DIR = os.path.abspath(os.path.join(unreal.Paths.convert_relative_path_to_full(
     unreal.Paths.project_saved_dir()), "GradeCaptures"))
 CMD_DIR = os.path.join(CAP_DIR, "cmd")
@@ -165,8 +166,9 @@ class Bridge(object):
                     c = mel.get_material_instance_vector_parameter_value(mi, prefix + p)
                     params[p] = [c.r, c.g, c.b]
                 if k:
-                    bits = int(round(mel.get_material_instance_scalar_parameter_value(mi, prefix + "Mask")))
-                    mask = [i for i in range(1, MAX_ID + 1) if bits >> (i - 1) & 1]
+                    for j, w in enumerate(WORDS):
+                        bits = int(round(mel.get_material_instance_scalar_parameter_value(mi, prefix + w)))
+                        mask += [j * 24 + b + 1 for b in range(24) if bits >> b & 1 and j * 24 + b + 1 <= MAX_ID]
                     if mel.get_material_instance_scalar_parameter_value(mi, prefix + "BG") > 0.5:
                         mask.insert(0, 0)                  # 0 = background (everything without a stencil ID)
             layers.append({"params": params, "mask": mask})
@@ -186,9 +188,11 @@ class Bridge(object):
                         mi, prefix + p, unreal.LinearColor(v[0], v[1], v[2], 1.0))
             if k:
                 ids = set(int(i) for i in layers[k].get("mask", []))
-                bits = sum(1 << (i - 1) for i in ids if 0 < i <= MAX_ID)
-                bg = 0 in ids
-                mel.set_material_instance_scalar_parameter_value(mi, prefix + "Mask", float(bits))
+                ids = set(i for i in ids if 0 <= i <= MAX_ID)
+                bits, bg = len(ids - {0}), 0 in ids
+                for j, w in enumerate(WORDS):
+                    word = sum(1 << ((i - 1) % 24) for i in ids if i and (i - 1) // 24 == j)
+                    mel.set_material_instance_scalar_parameter_value(mi, prefix + w, float(word))
                 mel.set_material_instance_scalar_parameter_value(mi, prefix + "BG", 1.0 if bg else 0.0)
                 mel.set_material_instance_scalar_parameter_value(mi, prefix + "UseParts", 1.0 if (bits or bg) else 0.0)
                 mel.set_material_instance_scalar_parameter_value(

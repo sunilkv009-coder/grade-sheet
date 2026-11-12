@@ -11,7 +11,7 @@ and engine version without shipping .uasset files.
 import os, struct, zlib
 import unreal
 
-VERSION = "4"                      # bump to rebuild the materials in existing projects
+VERSION = "5"                      # bump to rebuild the materials in existing projects
 PARAMS = [("Blackpoint", 0.0), ("Whitepoint", 1.0), ("Lift", 0.0), ("Gain", 1.0),
           ("Multiply", 1.0), ("Offset", 0.0), ("Gamma", 1.0),
           ("Shadows", 1.0), ("Midtones", 1.0), ("Highlights", 1.0)]
@@ -113,7 +113,23 @@ def build_grade(mat, none_tex):
     sten.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_CUSTOM_STENCIL)
     rnd = new(unreal.MaterialExpressionRound, -2500, 50)
     mel.connect_material_expressions(chan(sten, "Color", "r", -2650, 50), "", rnd, "")
-    bit = op(unreal.MaterialExpressionPower, two, op(S, rnd, one, -2350, 50), -2200, 50, "Base", "Exp")
+    # stencil IDs 1-255 are stored 24 to a scalar (a float holds 24 bits exactly): word = (id-1)/24, bit = (id-1)%24
+    def unary(cls, src, x, y):
+        e = new(cls, x, y)
+        mel.connect_material_expressions(src, "", e, "")
+        return e
+    k24 = const(24.0, -2900, -120)
+    idx = op(S, rnd, one, -2350, 50)
+    word = unary(unreal.MaterialExpressionFloor, op(D, idx, k24, -2250, -40), -2150, -40)
+    low = op(S, idx, op(M, word, k24, -2050, -40), -1950, 50)
+    bit = unary(unreal.MaterialExpressionRound,
+                op(unreal.MaterialExpressionPower, two, low, -1850, 50, "Base", "Exp"), -1750, 50)
+    is_word = []                                         # 1 where the pixel's ID is in word j
+    for j in range(11):
+        d = unary(unreal.MaterialExpressionAbs, op(S, word, const(float(j), -2900, -1700 - j * 60), -2650, -1700 - j * 60),
+                  -2500, -1700 - j * 60)
+        is_word.append(unary(unreal.MaterialExpressionOneMinus,
+                             unary(unreal.MaterialExpressionSaturate, d, -2350, -1700 - j * 60), -2200, -1700 - j * 60))
     satid = new(unreal.MaterialExpressionSaturate, -2350, 200)
     mel.connect_material_expressions(rnd, "", satid, "")
     notcar = op(S, one, satid, -2200, 200)               # 1 where there is no stencil (background)
@@ -162,7 +178,12 @@ def build_grade(mat, none_tex):
     for k, (prefix, group) in enumerate(LAYERS[1:]):
         y0 = 2600 * (k + 1)
         fl = new(unreal.MaterialExpressionFloor, -1900, y0 - 500)
-        mel.connect_material_expressions(op(D, scalar(prefix + "Mask", group, -2200, y0 - 500), bit, -2050, y0 - 500), "", fl, "")
+        bits = None
+        for j in range(11):                              # "Mask" = IDs 1-24 (as before), "Mask1" = 25-48, ...
+            w = op(M, scalar(prefix + ("Mask%d" % j if j else "Mask"), group, -2500, y0 - 1300 + j * 60), is_word[j],
+                   -2300, y0 - 1300 + j * 60)
+            bits = w if bits is None else op(A, bits, w, -2150, y0 - 1300 + j * 60)
+        mel.connect_material_expressions(op(D, bits, bit, -2050, y0 - 500), "", fl, "")
         part = op(unreal.MaterialExpressionFmod, fl, two, -1750, y0 - 500)
         part = op(unreal.MaterialExpressionMax, part, op(M, scalar(prefix + "BG", group, -2200, y0 - 600), notcar, -1950, y0 - 600),
                   -1650, y0 - 600)
