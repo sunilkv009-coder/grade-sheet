@@ -112,6 +112,8 @@
   label.ck small.warn { color:var(--warn); }
   #parts { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0; max-height:92px; overflow:auto; }
   #parts .chip { cursor:pointer; color:var(--text); }
+  #parts .cnt { width:100%; color:var(--mute); font-size:11px; }
+  #lvmenu button.wide { width:100%; margin-top:6px; }
   #parts .chip.on { background:rgba(255,80,200,.18); border-color:#ff50c8; color:#ffb3ea; }
   .shape { display:flex; align-items:center; gap:8px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; margin-top:6px; cursor:pointer; }
   .shape.sel { border-color:var(--shape); background:rgba(79,214,255,.08); }
@@ -209,6 +211,7 @@
           <button id="pick">Pick parts</button><button id="show">Show mask</button><button id="clear">Clear</button>
         </div>
         <div class="dd"><button id="lvbtn"><span></span>&#9662;</button><div id="lvmenu"></div></div>
+        <div class="hint" id="idwarn" style="color:var(--warn);display:none"></div>
         <div id="parts"></div>
         <div class="btns"><button id="maskall" class="wide">Use these parts on all cameras</button></div>
         <p class="lbl sp">Mask by drawn shapes</p>
@@ -409,6 +412,19 @@ function pixels(img) {
   const x = c.getContext("2d", { willReadFrequently:true }); x.drawImage(img, 0, 0);
   return x.getImageData(0, 0, c.width, c.height);
 }
+// a part-ID picture holds grey values = stencil IDs. A colour picture there means the ID view was not on
+// when Unreal took it (for example a capture that only finished after the window was closed).
+function checkIds(su) {
+  const px = su.idpx, known = new Set([0, ...S.parts.map(p => p.id)]);
+  let n = 0, grey = 0, ok = 0;
+  for (let i = 0; i < px.length; i += 4 * 37) { n++;
+    const r = px[i], g = px[i + 1], b = px[i + 2];
+    if (Math.abs(r - g) <= 2 && Math.abs(g - b) <= 2) { grey++; if (known.has(r)) ok++; } }
+  const gp = Math.round(grey / n * 100), kp = Math.round(ok / n * 100), good = gp >= 95 && kp >= 90;
+  su.idNote = gp < 95 ? "it is a colour picture" : kp + "% of it matches known parts";
+  logMsg("part-ID picture " + su.id + ": " + gp + "% grey, " + kp + "% known stencil IDs -> " + (good ? "ok" : "NOT usable"), good ? "INFO" : "WARN");
+  return good ? "ok" : "bad";
+}
 async function loadImages() {
   const bust = "?t=" + Date.now();
   await Promise.all(S.setups.map(async su => {
@@ -421,6 +437,7 @@ async function loadImages() {
       if (!su.patch) su.patch = [su.w >> 1, su.h >> 1];
     }
     if (idImg && img && idImg.naturalWidth === su.w) { su.idpx = pixels(idImg).data; upload(cam, su.tex.id, idImg); }
+    su.idState = !img ? null : !su.idpx ? "missing" : checkIds(su);
     rasterize(su);
     const ref = await loadImg("/img/ref_" + su.id + ".png" + bust); if (ref) setRef(su, ref);
   }));
@@ -616,7 +633,11 @@ function buildTiles() {
         else { const u = shapeUnder(su, x, y);
           if (u >= 0) { S.shape = u; S.drag = { kind:"move", last:[x, y] }; syncPanel(); }
           else if (S.tool === "pick") { if (!su.idpx) return toast("Recapture first to enable picking");
-            return toggleId(idAt(su, Math.floor(x), Math.floor(y))); }
+            if (su.idState === "bad") return toast("The part-ID picture is not usable. Press Recapture all");
+            const id = idAt(su, Math.floor(x), Math.floor(y)), part = S.parts.find(p => p.id === id);
+            if (id && !part) return toast("This part has stencil " + id + ", which no mesh in the open levels uses. Recapture all");
+            if (part && S.lvFilter && !S.lvFilter.has(part.level || "level")) return toast(part.name + " is in " + part.level + ", which is not ticked under Parts from");
+            return toggleId(id); }
           else if (S.shape >= 0) { S.shape = -1; syncPanel(); } }
       }
       if (S.drag) cv.setPointerCapture(e.pointerId);
@@ -780,22 +801,36 @@ function syncPanel() {
   $("pick").classList.toggle("on", S.tool === "pick"); $("show").classList.toggle("on", S.show);
   $("drawbtn").classList.toggle("on", S.tool === "draw");
   $("drawbtn").textContent = S.tool === "draw" ? "Drawing... (Enter to finish, Esc to cancel)" : "Draw a shape";
-  // level dropdown: tick any levels; "Background" is everything that is not a stencil part
-  const menu = $("lvmenu"), picked = []; menu.innerHTML = "";
-  const item = (label, ids, note) => { const all = ids.every(i => L.mask.includes(i)); if (all) picked.push(label);
+  // level dropdown: which levels' parts are listed here and can be picked in the image. Ticking a level does NOT
+  // mask it; only the parts you click (or "Use every part of these levels") go into the mask.
+  const menu = $("lvmenu"); menu.innerHTML = "";
+  const lvNames = [...new Set(S.parts.map(p => p.level || "level"))];
+  if (!S.lvFilter) S.lvFilter = new Set(lvNames);
+  for (const name of lvNames) { const n = S.parts.filter(p => (p.level || "level") === name).length;
     const row = document.createElement("label"), cb = document.createElement("input"), sm = document.createElement("small");
-    row.className = "ck"; cb.type = "checkbox"; cb.checked = all; sm.textContent = note;
-    cb.onchange = () => { for (const i of ids) { const k = L.mask.indexOf(i); if (!cb.checked) { if (k >= 0) L.mask.splice(k, 1); } else if (k < 0) L.mask.push(i); }
-      syncPanel(); refresh(); pushSoon(); };
-    row.append(cb, label, sm); menu.appendChild(row); };
-  for (const name of [...new Set(S.parts.map(p => p.level || "level"))]) { const ids = S.parts.filter(p => (p.level || "level") === name).map(p => p.id);
-    item(name, ids, ids.length + " parts"); }
-  item("Background", [0], "everything else");
-  $("lvbtn").firstChild.textContent = picked.length ? "Levels: " + picked.join(", ") : "Levels: none ticked";
+    row.className = "ck"; cb.type = "checkbox"; cb.checked = S.lvFilter.has(name); sm.textContent = n + " parts";
+    cb.onchange = () => { if (cb.checked) S.lvFilter.add(name); else S.lvFilter.delete(name); syncPanel(); };
+    row.append(cb, name, sm); menu.appendChild(row); }
+  const inLv = p => S.lvFilter.has(p.level || "level"), shown = S.parts.filter(inLv);
+  const allBtn = document.createElement("button"); allBtn.className = "wide"; allBtn.textContent = "Use every part of the ticked levels (" + shown.length + ")";
+  allBtn.onclick = e => { e.stopPropagation(); for (const p of shown) if (!L.mask.includes(p.id)) L.mask.push(p.id); syncPanel(); refresh(); pushSoon(); };
+  menu.appendChild(allBtn);
+  $("lvbtn").firstChild.textContent = "Parts from: " + (S.lvFilter.size === lvNames.length ? "all levels" : [...S.lvFilter].join(", ") || "no levels");
   const parts = $("parts"); parts.innerHTML = "";
-  for (const p of S.parts) { const c = document.createElement("span");
-    c.className = "chip" + (L.mask.includes(p.id) ? " on" : ""); c.textContent = p.name.replace(/_\d+$/, "");
-    c.title = p.name + " (stencil " + p.id + ")"; c.onclick = () => toggleId(p.id); parts.appendChild(c); }
+  const chip = (id, label, title) => { const c = document.createElement("span");
+    c.className = "chip" + (L.mask.includes(id) ? " on" : ""); c.textContent = label; c.title = title;
+    c.onclick = () => toggleId(id); parts.appendChild(c); };
+  chip(0, "Background", "Everything that has no part ID (stencil 0)");
+  const chosen = L.mask.filter(i => i > 0).length;
+  for (const p of [...shown].sort((a, b) => L.mask.includes(b.id) - L.mask.includes(a.id)))      // chosen parts first
+    chip(p.id, p.name.replace(/_\d+$/, ""), p.name + " (stencil " + p.id + ", level " + p.level + ")");
+  const cnt = document.createElement("small"); cnt.className = "cnt"; cnt.textContent = chosen + " of " + S.parts.length + " parts chosen";
+  parts.prepend(cnt);
+  const st = su.idState, w = $("idwarn");
+  w.style.display = st && st !== "ok" ? "block" : "none";
+  w.textContent = st === "missing" ? "No part-ID picture for this camera, so parts can't be picked or shown. Press Recapture all."
+    : st === "bad" ? "The part-ID picture for this camera did not come out right (" + su.idNote + "), so part masks can't be shown here. Press Recapture all and keep Grade Sheet open until it finishes."
+    : "";
   const list = $("shapes"); list.innerHTML = ""; let n = 0;
   su.shapes.forEach((s, i) => { if (s.layer !== S.layer || !s.closed) return; n++;
     const row = document.createElement("div"); row.className = "shape" + (i === S.shape ? " sel" : "");
