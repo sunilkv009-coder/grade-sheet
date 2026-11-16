@@ -215,7 +215,7 @@
         <div id="parts"></div>
         <div class="btns"><button id="maskall" class="wide">Use these parts on all cameras</button></div>
         <p class="lbl sp">Mask by drawn shapes</p>
-        <div class="btns"><button id="drawbtn" class="wide">Draw a shape</button></div>
+        <div class="btns"><button id="drawbtn" title="Draw a shape with its own grade (it goes on the next free layer)">Draw a new shape</button><button id="drawadd" title="Draw another shape into this layer; it shares this layer's grade">Add to this layer</button></div>
         <div id="shapes"></div>
         <div class="hint" id="maskhint"></div>
       </div>
@@ -636,7 +636,7 @@ function buildTiles() {
             if (su.idState === "bad") return toast("The part-ID picture is not usable. Press Recapture all");
             const id = idAt(su, Math.floor(x), Math.floor(y)), part = S.parts.find(p => p.id === id);
             if (id && !part) return toast("This part has stencil " + id + ", which no mesh in the open levels uses. Recapture all");
-            if (part && S.lvFilter && !S.lvFilter.has(part.level || "level")) return toast(part.name + " is in " + part.level + ", which is not ticked under Parts from");
+            if (part && S.lvFilter && !(part.levels || [part.level]).some(l => S.lvFilter.has(l))) return toast(part.name + " is in " + part.level + ", which is not ticked under Parts from");
             return toggleId(id); }
           else if (S.shape >= 0) { S.shape = -1; syncPanel(); } }
       }
@@ -792,7 +792,9 @@ function syncPanel() {
   $("refhint").textContent = !su.refW ? "No reference for " + su.cam + " yet." :
     S.refOn ? "Drag the divider. Scroll to zoom, middle-drag to pan; both sides move together. Press All cameras on the image to see every camera again." :
     "A reference is loaded for " + su.cam + ". Turn on Side by side to compare.";
-  [...$("tabs").children].forEach((b, k) => b.classList.toggle("on", k === S.layer));
+  [...$("tabs").children].forEach((b, k) => { b.classList.toggle("on", k === S.layer);
+    const ns = k ? su.shapes.filter(x => x.layer === k && x.closed).length : 0, np = k ? su.layers[k].mask.length : 0;
+    b.textContent = LAYERS[k] + (ns || np ? " •" : ""); b.title = !k ? "Grades the whole frame" : (ns + " shape(s), " + np + " part(s)"); });
   const L = su.layers[S.layer];
   for (const [name] of P) { const v = L.params[name], r = rows[name], m = (v[0] + v[1] + v[2]) / 3;
     r.m.value = m; r.t.forEach((t, c) => t.value = v[c] - m);
@@ -800,22 +802,26 @@ function syncPanel() {
   $("maskbox").style.display = S.layer ? "block" : "none";
   $("pick").classList.toggle("on", S.tool === "pick"); $("show").classList.toggle("on", S.show);
   $("drawbtn").classList.toggle("on", S.tool === "draw");
-  $("drawbtn").textContent = S.tool === "draw" ? "Drawing... (Enter to finish, Esc to cancel)" : "Draw a shape";
+  $("drawbtn").textContent = S.tool === "draw" ? "Drawing... (Enter / Esc)" : "Draw a new shape";
+  $("drawadd").disabled = !hasShape(su, S.layer) || S.tool === "draw";
   // level dropdown: which levels' parts are listed here and can be picked in the image. Ticking a level does NOT
   // mask it; only the parts you click (or "Use every part of these levels") go into the mask.
   const menu = $("lvmenu"); menu.innerHTML = "";
-  const lvNames = [...new Set(S.parts.map(p => p.level || "level"))];
-  if (!S.lvFilter) S.lvFilter = new Set(lvNames);
-  for (const name of lvNames) { const n = S.parts.filter(p => (p.level || "level") === name).length;
+  const lvOf = p => p.levels || [p.level || "level"];
+  // only this camera's active levels that hold parts
+  const lvNames = su.levels.filter(l => S.parts.some(p => lvOf(p).includes(l)));
+  if (!S.lvFilter || S.lvFor !== su.id) { S.lvFilter = new Set(lvNames); S.lvFor = su.id; }
+  for (const name of lvNames) { const n = S.parts.filter(p => lvOf(p).includes(name)).length;
     const row = document.createElement("label"), cb = document.createElement("input"), sm = document.createElement("small");
     row.className = "ck"; cb.type = "checkbox"; cb.checked = S.lvFilter.has(name); sm.textContent = n + " parts";
     cb.onchange = () => { if (cb.checked) S.lvFilter.add(name); else S.lvFilter.delete(name); syncPanel(); };
     row.append(cb, name, sm); menu.appendChild(row); }
-  const inLv = p => S.lvFilter.has(p.level || "level"), shown = S.parts.filter(inLv);
+  const inLv = p => lvOf(p).some(l => S.lvFilter.has(l)), shown = S.parts.filter(inLv);
   const allBtn = document.createElement("button"); allBtn.className = "wide"; allBtn.textContent = "Use every part of the ticked levels (" + shown.length + ")";
   allBtn.onclick = e => { e.stopPropagation(); for (const p of shown) if (!L.mask.includes(p.id)) L.mask.push(p.id); syncPanel(); refresh(); pushSoon(); };
   menu.appendChild(allBtn);
-  $("lvbtn").firstChild.textContent = "Parts from: " + (S.lvFilter.size === lvNames.length ? "all levels" : [...S.lvFilter].join(", ") || "no levels");
+  $("lvbtn").firstChild.textContent = !lvNames.length ? "No parts in this camera's active levels"
+    : "Parts from: " + (S.lvFilter.size === lvNames.length ? "all active levels (" + lvNames.length + ")" : [...S.lvFilter].join(", ") || "no levels");
   const parts = $("parts"); parts.innerHTML = "";
   const chip = (id, label, title) => { const c = document.createElement("span");
     c.className = "chip" + (L.mask.includes(id) ? " on" : ""); c.textContent = label; c.title = title;
@@ -824,7 +830,9 @@ function syncPanel() {
   const chosen = L.mask.filter(i => i > 0).length;
   for (const p of [...shown].sort((a, b) => L.mask.includes(b.id) - L.mask.includes(a.id)))      // chosen parts first
     chip(p.id, p.name.replace(/_\d+$/, ""), p.name + " (stencil " + p.id + ", level " + p.level + ")");
-  const cnt = document.createElement("small"); cnt.className = "cnt"; cnt.textContent = chosen + " of " + S.parts.length + " parts chosen";
+  const cnt = document.createElement("small"); cnt.className = "cnt";
+  cnt.textContent = lvNames.length ? chosen + " chosen, " + shown.length + " parts listed"
+    : "None of this camera's active levels has meshes with a stencil ID. Run Grade Sheet > Assign part IDs to meshes, or add the car's level to the active levels.";
   parts.prepend(cnt);
   const st = su.idState, w = $("idwarn");
   w.style.display = st && st !== "ok" ? "block" : "none";
@@ -834,7 +842,7 @@ function syncPanel() {
   const list = $("shapes"); list.innerHTML = ""; let n = 0;
   su.shapes.forEach((s, i) => { if (s.layer !== S.layer || !s.closed) return; n++;
     const row = document.createElement("div"); row.className = "shape" + (i === S.shape ? " sel" : "");
-    row.innerHTML = '<span class="nm">Shape ' + n + '</span><input type="range" min="0" max="150" step="1" title="Feather">' +
+    row.innerHTML = '<span class="nm">Shape ' + (su.shapes.filter(x => x.closed).indexOf(s) + 1) + '</span><input type="range" min="0" max="150" step="1" title="Feather">' +
       '<span class="num"></span><button title="Delete shape">&times;</button>';
     const sl = row.querySelector("input"), num = row.querySelector(".num");
     sl.value = s.feather; num.textContent = s.feather + " px";
@@ -920,7 +928,19 @@ $("reffile").onchange = async e => { const f = e.target.files[0], su = cur(); e.
 $("refon").onclick = need(() => { if (!cur().refW) return toast("Upload a reference image for this camera first");
   smooth(() => { S.refOn = !S.refOn; if (S.refOn) S.solo = true; syncPanel(); refresh(); }); });
 $("pick").onclick = need(() => { cancelDraw(); S.tool = S.tool === "pick" ? "none" : "pick"; S.shape = -1; syncPanel(); refresh(); });
-$("drawbtn").onclick = need(() => { if (S.tool === "draw") cancelDraw(); else { S.tool = "draw"; S.shape = -1; } syncPanel(); refresh(); });
+// a new shape gets its own grade: it goes on the next layer that has no mask yet (A, B, C).
+// "Add to this layer" draws into the current layer instead (the shapes then share that layer's grade).
+const layerUsed = (su, k) => su.layers[k].mask.length > 0 || hasShape(su, k);
+$("drawbtn").onclick = need(() => {
+  if (S.tool === "draw") { cancelDraw(); syncPanel(); return refresh(); }
+  const su = cur();
+  if (layerUsed(su, S.layer)) {
+    const free = [1, 2, 3].find(k => !layerUsed(su, k));
+    if (!free) { toast("Layers A, B and C all have a mask. Use Add to this layer, or clear a layer first"); return; }
+    S.layer = free; toast("The new shape gets its own grade on " + LAYERS[free]);
+  }
+  S.tool = "draw"; S.shape = -1; syncPanel(); refresh(); });
+$("drawadd").onclick = need(() => { if (S.tool === "draw") cancelDraw(); else { S.tool = "draw"; S.shape = -1; } syncPanel(); refresh(); });
 $("show").onclick = need(() => { S.show = !S.show; syncPanel(); refresh(); });
 $("clear").onclick = need(() => { cur().layers[S.layer].mask = []; changed("Parts cleared"); });
 $("maskall").onclick = need(() => { const m = cur().layers[S.layer].mask;

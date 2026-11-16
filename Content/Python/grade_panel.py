@@ -221,6 +221,7 @@ class Bridge(object):
 
     def scan(self):
         """Cameras, grade volumes and stencil parts currently in the world."""
+        t0 = time.time()
         self.cams, self.ppvs, parts, lv = {}, {}, {}, {}
         for a in eas.get_all_level_actors():
             if isinstance(a, unreal.CineCameraActor):
@@ -231,16 +232,25 @@ class Bridge(object):
                     sid = a.get_actor_label()[len("PPV_Grade_"):]      # made by an older version: named PPV_Grade_<id>
                 if sid:
                     self.ppvs[sid] = a
-            elif isinstance(a, unreal.StaticMeshActor):
-                comp = a.static_mesh_component
-                if comp.get_editor_property("render_custom_depth"):
+            # every mesh component with a stencil ID counts, whatever actor it sits on (CAD / Datasmith imports
+            # often put many mesh components on one actor, or use blueprints instead of static mesh actors)
+            comps = a.get_components_by_class(unreal.PrimitiveComponent) if not isinstance(a, unreal.CineCameraActor) else []
+            for comp in comps:
+                try:
+                    if not comp.get_editor_property("render_custom_depth"):
+                        continue
                     sid = int(comp.get_editor_property("custom_depth_stencil_value"))
-                    if 0 < sid <= MAX_ID:
-                        mat = comp.get_material(0)
-                        parts.setdefault(sid, set()).add(mat.get_name() if mat else a.get_actor_label())
-                        lv.setdefault(sid, set()).add(lname(a.get_outer()))
-        self.parts = [{"id": k, "name": ", ".join(sorted(v)), "level": ", ".join(sorted(lv[k]))}
+                except Exception:
+                    continue
+                if 0 < sid <= MAX_ID:
+                    mat = comp.get_material(0) if isinstance(comp, unreal.MeshComponent) else None
+                    parts.setdefault(sid, set()).add(mat.get_name() if mat else a.get_actor_label())
+                    lv.setdefault(sid, set()).add(lname(a.get_outer()))
+        self.parts = [{"id": k, "name": ", ".join(sorted(v)[:3]) + (" +%d more" % (len(v) - 3) if len(v) > 3 else ""),
+                       "level": ", ".join(sorted(lv[k])), "levels": sorted(lv[k])}
                       for k, v in sorted(parts.items())]
+        glog.info("scan: %d cameras, %d grade volumes, %d part IDs in %d levels (%.1f s)" % (
+            len(self.cams), len(self.ppvs), len(self.parts), len(set(l for p in self.parts for l in p["levels"])), time.time() - t0))
 
     def setup(self, sid):
         for s in self.cfg["setups"]:
