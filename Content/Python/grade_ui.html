@@ -156,6 +156,7 @@
 <body>
 <header>
   <span class="dot"></span><h1>Grade Sheet<span id="openname"></span></h1><span id="status">Loading</span><span class="grow"></span>
+  <button id="logbtn" title="Open the Grade Sheet log (what the tool did, and any errors)">Log</button>
   <button id="setupbtn" title="Open another grade setup, or create a new one">Setups</button>
   <button id="undo" title="Undo (Ctrl+Z)">Undo</button><button id="redo" title="Redo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
   <button id="ab" title="Drag the divider on any image: left is before, right is after">Compare before / after</button>
@@ -950,6 +951,7 @@ function saveForm() {                         // the page of one camera -> W.ent
   return true;
 }
 function finishWizard() {
+  logMsg("wizard finished: " + W.name + " on " + W.cams.filter(c => W.entries[c]).join(", "));
   const others = S.setups.filter(s => s.name !== W.name).map(plain);
   const mine = W.cams.filter(c => W.entries[c]).map(c => ({ cam:c, name:W.name, variant:W.variant || Object.keys(W.variants).length > 0, variants:W.variants, ...W.entries[c] }));
   sendConfig(others.concat(mine), W.name);
@@ -1072,6 +1074,7 @@ setInterval(async () => {
   im.src = "/img/preview.png?t=" + Date.now();
 }, 500);
 $("setupbtn").onclick = openList;
+$("logbtn").onclick = () => fetch("/openlog", { method:"POST" }).then(r => r.text()).then(t => toast(t === "ok" ? "Log opened in your text editor" : "No log yet")).catch(() => toast("Could not open the log"));
 $("busystop").onclick = () => { post({ op:"cancel" }); $("busysub").textContent = "Stopping..."; };
 $("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
 $("wback").onclick = () => { W.msg = "";
@@ -1095,7 +1098,12 @@ $("wnext").onclick = () => {
 // ---------------------------------------------------------------- start + polling
 async function getJSON(url) { try { const r = await fetch(url + "?t=" + Date.now()); return r.ok ? await r.json() : null; } catch (e) { return null; } }
 S.lastOk = Date.now();
+// everything worth knowing goes to GradeSheet.log too (Grade Sheet > Open log, or the Log button)
+function logMsg(msg, level) { try { fetch("/log", { method:"POST", body:JSON.stringify({ msg:String(msg), level:level || "INFO" }) }).catch(() => {}); } catch (e) {} }
+window.addEventListener("error", e => logMsg("page error: " + e.message + " at " + (e.filename || "").split("/").pop() + ":" + e.lineno + (e.error && e.error.stack ? "\n" + e.error.stack : ""), "ERROR"));
+window.addEventListener("unhandledrejection", e => logMsg("page error (promise): " + (e.reason && e.reason.stack || e.reason), "ERROR"));
 function lostLink() {
+  if (!S.lostLogged) { S.lostLogged = true; logMsg("lost the connection to Unreal (no state for 6 s)", "WARN"); }
   $("busy").classList.add("on");
   $("busytxt").textContent = "Lost the connection to Unreal";
   $("busysub").textContent = "Close this window and open Grade Sheet again from the Unreal menu. Nothing has been saved.";

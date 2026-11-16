@@ -77,6 +77,10 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 
 ## Good to know
 
+- **Log.** Everything the tool does, and every error, is written to `Saved/GradeCaptures/GradeSheet.log` in your
+  project (Unreal, the window and the page each tag their lines). Open it with **Grade Sheet > Open log** or the
+  **Log** button in the window, and send it along when reporting a problem.
+
 - **What it changes and saves in your project.** Nothing is saved until you press **Save grades**, and then only
   the tool's own folder (`Content/GradeSheet`) and the levels your grade volumes live in. Showing and hiding levels
   for previews and captures does not mark any level as changed, and level visibility and the current level are put

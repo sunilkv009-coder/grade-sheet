@@ -98,6 +98,17 @@ def run():
     if skipped:
         msg += "\n\nSkipped levels: " + ", ".join(skipped)
     msg += "\n\nSave the changed levels, then press Recapture all in the Grade Sheet."
+    try:
+        import sys
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import grade_log as glog
+        glog.setup(os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()),
+                                "GradeCaptures"), "unreal")
+        glog.info("assign part IDs: " + msg.replace("\n\n", " | "))
+    except Exception:
+        pass
     ask("Grade Sheet", msg, unreal.AppMsgType.OK)
 
 

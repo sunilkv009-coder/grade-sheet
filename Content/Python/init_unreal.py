@@ -51,6 +51,9 @@ def register():
         sub.add_menu_entry("Main", _entry("GradeSheetStencils", "Assign part IDs to meshes",
                                           "Give meshes that have no stencil ID a new one per material. Existing stencil IDs are never changed",
                                           "grade_stencils.py"))
+        sub.add_menu_entry("Main", _entry("GradeSheetLog", "Open log",
+                                          "Open the Grade Sheet log: what the tool did, and any errors (send it when reporting a problem)",
+                                          "grade_openlog.py"))
     bar = menus.find_menu("LevelEditor.LevelEditorToolBar.User")
     if bar:
         bar.add_menu_entry("GradeSheet", _entry("GradeSheetButton", "Grade Sheet", "Open the Grade Sheet", "grade_panel.py",

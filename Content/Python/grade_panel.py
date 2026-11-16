@@ -32,6 +32,27 @@ CMD_DIR = os.path.join(CAP_DIR, "cmd")
 os.makedirs(CMD_DIR, exist_ok=True)
 PROJECT = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
 HERE = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.path.join(PROJECT, "Scripts")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import grade_log as glog
+glog.setup(CAP_DIR, "unreal", rotate=True)
+
+
+def info(msg):
+    unreal.log("GRADE_PANEL " + msg)
+    glog.info(msg)
+
+
+def warn(msg):
+    unreal.log_warning("GRADE_PANEL " + msg)
+    glog.warn(msg)
+
+
+def fail(msg):
+    unreal.log_error("GRADE_PANEL " + msg + "\n" + traceback.format_exc())
+    glog.error(msg)
+
+
 CFG = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_config_dir()), "GradeSheetSetups.json")
 if not os.path.exists(CFG) and os.path.exists(os.path.join(PROJECT, "Scripts", "grade_setups.json")):
     shutil.copyfile(os.path.join(PROJECT, "Scripts", "grade_setups.json"), CFG)        # setups made before the plugin existed
@@ -112,6 +133,17 @@ def restore_levels(vis):
             set_visible(l, on)
 
 
+def redraw():
+    """Ask Unreal to draw its viewports now (a pending screenshot is taken on the next draw)."""
+    for owner in (les, getattr(unreal, "EditorLevelLibrary", None)):
+        fn = getattr(owner, "editor_invalidate_viewports", None) if owner else None
+        if fn:
+            try:
+                return fn()
+            except Exception:
+                pass
+
+
 def safe(s):
     return re.sub(r"[^A-Za-z0-9_]", "_", str(s)).strip("_") or "x"
 
@@ -181,11 +213,11 @@ class Bridge(object):
                 with open(CFG) as f:
                     self.cfg = json.load(f)
             except Exception:
-                unreal.log_warning("GRADE_PANEL could not read " + CFG)
+                warn("could not read " + CFG)
         self.scan()
         renamed = [ppv_label(s) for s in self.cfg["setups"] if self.name_volume(s)]
         if renamed:                                              # volumes from an older version get the studio names
-            unreal.log("GRADE_PANEL renamed volumes: " + ", ".join(renamed))
+            info("renamed volumes: " + ", ".join(renamed))
 
     def scan(self):
         """Cameras, grade volumes and stencil parts currently in the world."""
@@ -221,7 +253,7 @@ class Bridge(object):
             with open(CFG, "w") as f:
                 json.dump(self.cfg, f, indent=1)
         except OSError:
-            unreal.log_warning("GRADE_PANEL could not write %s (read-only? check it out)" % CFG)
+            warn("could not write %s (read-only? check it out)" % CFG)
 
     # ------------------------------------------------------------ grade instances
     def mi(self, sid):
@@ -364,6 +396,7 @@ class Bridge(object):
         return True
 
     def remove_setup(self, sid):
+        glog.info("removing setup %s" % sid)
         vol = self.ppvs.pop(sid, None)
         if vol:
             eas.destroy_actor(vol)
@@ -413,9 +446,13 @@ class Bridge(object):
             try:
                 self.ensure_setup(s)
             except Exception as e:
+                glog.error("could not set up %s" % s["id"])
                 errors.append("%s: %s" % (s["name"], e))
         self.rest_state()
         self.save_cfg()
+        for s in new:
+            vol = self.ppvs.get(s["id"])
+            glog.info("  volume %s in %s" % (vol.get_actor_label() if vol else "MISSING", s["target"]))
         msg = "%d cameras, %d grade setups" % (len(cams), len(new))
         if skipped:
             msg += ". Skipped (protected level): " + ", ".join(skipped)
@@ -426,6 +463,8 @@ class Bridge(object):
     # ------------------------------------------------------------ state for the window
     def write_state(self, status=None):
         if status is not None:
+            if status != self.status and "waiting for Unreal" not in status and not status.startswith("Capturing"):
+                glog.info("status: " + status) if status else None
             self.status = status
         setups = []
         for s in self.cfg["setups"]:
@@ -445,6 +484,16 @@ class Bridge(object):
     # ------------------------------------------------------------ commands
     def handle_cmd(self, c):
         op = c.get("op")
+        if op == "config":
+            glog.info("setup wizard sent %d setups for cameras %s" % (len(c.get("setups", [])), ", ".join(c.get("cameras", []))))
+            for x in c.get("setups", []):
+                glog.info("  %s / %s -> grade in %s%s, levels: %s" % (x.get("cam"), x.get("name"), x.get("target"),
+                          " (override)" if x.get("override") else "", ", ".join(x.get("levels", []))))
+        elif op == "preview":
+            glog.info("preview %s with %s" % (c.get("cam"), "every level" if c.get("levels") is None
+                                              else ", ".join(c.get("levels")) or "no levels"))
+        elif op not in ("set", "shapes", "mask"):
+            glog.info("command: " + json.dumps(c)[:300])
         if op == "set":
             self.apply(c["id"], c["layers"])
         elif op == "shapes":
@@ -484,6 +533,7 @@ class Bridge(object):
             levels = sublevels()                                 # and only the levels the grades live in
             pkgs = list({levels[s["target"]].get_outermost().get_name(): levels[s["target"]].get_outermost()
                          for s in self.cfg["setups"] if s["target"] in levels}.values())
+            glog.info("save grades: %s and levels %s" % (PKG, ", ".join(p.get_name() for p in pkgs) or "none"))
             if pkgs:
                 unreal.EditorLoadingAndSavingUtils.save_packages(pkgs, True)
             with open(os.path.join(CAP_DIR, "grades.json"), "w") as f:
@@ -578,7 +628,7 @@ class Bridge(object):
                 if want and want.strip().lower() in names:
                     vs[names.index(want.strip().lower())].switch_on()
         except Exception:
-            unreal.log_warning("GRADE_PANEL variant switch failed: " + traceback.format_exc())
+            fail("variant switch failed")
 
     def start_capture(self, ids=None):
         """Capture the given setups (None = all of them)."""
@@ -595,6 +645,8 @@ class Bridge(object):
         self.cap_queue, self.cap_until = q + [("done",)], 0.0
         self.shot_wait, self.missing = None, []
         self.keep_rendering(True)
+        self.cap_started = time.time()
+        glog.info("capture started: " + ", ".join(s["id"] for s in todo))
         self.write_state("Capturing")
 
     def shot_snapshot(self):
@@ -623,7 +675,7 @@ class Bridge(object):
                 return False
             if os.path.normcase(found) != os.path.normcase(path):
                 shutil.move(found, path)
-                unreal.log("GRADE_PANEL moved screenshot %s -> %s" % (found, path))
+                info("screenshot was written to %s, moved to %s" % (found, path))
             return True
         except OSError:
             return False
@@ -657,18 +709,22 @@ class Bridge(object):
             if self.t < self.next_shot_check:
                 return
             self.next_shot_check = self.t + 0.5
+            redraw()
             if self.find_shot(path, before):
+                glog.info("  picture written after %.1f s: %s" % (self.t - (deadline - SHOT_TIMEOUT), os.path.basename(path)))
                 self.shot_wait = None
             elif self.t > deadline:
-                unreal.log_warning("GRADE_PANEL no screenshot file after %ds: %s (also looked in %s)"
-                                   % (SHOT_TIMEOUT, path, ", ".join(SHOT_DIRS)))
+                warn("no screenshot file after %ds: %s (also looked in %s)" % (SHOT_TIMEOUT, path, ", ".join(SHOT_DIRS)))
                 self.missing.append(os.path.basename(path))
                 self.shot_wait = None
             else:
                 waited = int(self.t - (deadline - SHOT_TIMEOUT))
                 if waited >= 3 and waited != self.shot_shown:
                     self.shot_shown = waited
-                    self.write_state("%s: waiting for Unreal to write the picture (%d s)" % (label, waited))
+                    self.write_state("%s: waiting for Unreal to write the picture (%d s)%s" % (
+                        label, waited, ". If this keeps counting, click once on the Unreal window" if waited >= 15 else ""))
+                    if waited in (15, 45):
+                        warn("still waiting for %s after %d s" % (os.path.basename(path), waited))
                 return
         if not self.cap_queue or self.t < self.cap_until:
             return
@@ -679,6 +735,8 @@ class Bridge(object):
             return
         if kind == "done":
             self.end_capture()
+            glog.info("capture finished in %.0f s, missing pictures: %s" % (
+                time.time() - getattr(self, "cap_started", time.time()), ", ".join(self.missing) or "none"))
             self.capture_id += 1
             if self.missing:
                 return self.write_state("Capture finished, but Unreal wrote no picture for %d shots (%s). "
@@ -692,6 +750,8 @@ class Bridge(object):
             show_levels(s["levels"])
             self.switch_variant(s)
             les.pilot_level_actor(cam)                           # look through the camera while the lighting settles
+            glog.info("  %s / %s: levels %s, variants %s" % (s["cam"], s["name"], ", ".join(s["levels"]),
+                                                             s.get("variants") or ("by name" if s.get("variant") else "none")))
             self.write_state("Capturing %s / %s" % (s["cam"], s["name"]))
         elif kind == "id":
             self.enable_grades(False, s["id"] if step[2] else None)
@@ -703,6 +763,7 @@ class Bridge(object):
                 os.remove(path)                                  # so an old picture is never taken for the new one
             label = "Capturing %s / %s%s" % (s["cam"], s["name"], " (part IDs)" if step[2] else "")
             before = self.shot_snapshot()
+            glog.info("  screenshot requested: %s" % os.path.basename(path))
             unreal.AutomationLibrary.take_high_res_screenshot(CAP_RES[0], CAP_RES[1], path)
             self.shot_wait, self.shot_size, self.shot_shown = (path, before, self.t + SHOT_TIMEOUT, label), {}, -1
             self.next_shot_check = self.t + 0.5
@@ -733,22 +794,35 @@ class Bridge(object):
                 self.next_poll = self.t + 0.15
                 for path in sorted(glob.glob(os.path.join(CMD_DIR, "*.json"))):
                     try:
+                        cmd = None
                         with open(path) as f:
                             cmd = json.load(f)
                         os.remove(path)
                         self.handle_cmd(cmd)
                     except Exception:
-                        unreal.log_warning("GRADE_PANEL cmd failed: " + traceback.format_exc())
-                        self.write_state("Error: see the Unreal output log")
+                        fail("command failed: %s" % (json.dumps(cmd)[:300] if cmd else path))
+                        self.write_state("Error: see Grade Sheet > Open log")
                         try:
                             os.remove(path)
                         except Exception:
                             pass
         except Exception:
-            unreal.log_warning("GRADE_PANEL " + traceback.format_exc())
-            self.cap_queue = []
+            fail("error in the update loop; capture stopped")
+            self.cap_queue, self.shot_wait = [], None
 
     def start(self):
+        try:
+            world = get_world()
+            perf = unreal.get_default_object(unreal.EditorPerformanceSettings)
+            glog.info("=" * 70)
+            glog.info("Grade Sheet opened | Unreal %s | project %s | map %s" % (
+                unreal.SystemLibrary.get_engine_version(), PROJECT, world.get_name() if world else "?"))
+            glog.info("%d sublevels, %d cine cameras, %d setups | assets in %s | captures in %s" % (
+                len(sublevels()), len(self.cams), len(self.cfg["setups"]), PKG, CAP_DIR))
+            glog.info("read-only levels: %s" % (", ".join(l["name"] for l in level_info() if l["readonly"]) or "none"))
+            glog.info("editor 'use less CPU in background': %s" % perf.get_editor_property("throttle_cpu_when_not_foreground"))
+        except Exception:
+            glog.error("could not write the session header")
         unreal.SystemLibrary.execute_console_command(None, "r.CustomDepth 3")   # stencil on
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
@@ -756,7 +830,7 @@ class Bridge(object):
         importlib.reload(grade_assets)
         built = grade_assets.ensure(PKG, CAP_DIR)                # builds the materials on first use
         if built:
-            unreal.log("GRADE_PANEL built: " + ", ".join(built))
+            info("built materials: " + ", ".join(built))
         for path in glob.glob(os.path.join(CMD_DIR, "*.json")):      # drop stale commands
             os.remove(path)
         try:                                                     # what is switched on right now, per variant table
@@ -785,7 +859,7 @@ try:
             old.proc.terminate()
     __main__._grade_bridge = Bridge()
     __main__._grade_bridge.start()
-    unreal.log("GRADE_PANEL started: %d cameras in the level, %d grade setups" % (
+    info("started: %d cameras in the level, %d grade setups" % (
         len(__main__._grade_bridge.cams), len(__main__._grade_bridge.cfg["setups"])))
 except Exception:
-    unreal.log_error("GRADE_PANEL failed:\n" + traceback.format_exc())
+    fail("could not start")

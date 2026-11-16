@@ -10,6 +10,9 @@ CAP_DIR = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 CMD_DIR = os.path.join(CAP_DIR, "cmd")
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(CMD_DIR, exist_ok=True)
+sys.path.insert(0, HERE)
+import grade_log as glog
+glog.setup(CAP_DIR, "window")
 PORT = 8765
 started = time.time()
 last_ping = [0.0]
@@ -57,6 +60,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/log":                         # a message from the page (errors, lost connection)
+                d = json.loads(body.decode("utf-8") or "{}")
+                glog.write(str(d.get("level", "INFO"))[:5].upper(), str(d.get("msg", ""))[:4000], "page")
+                return self.send_bytes(b"ok", "text/plain")
+            if self.path == "/openlog":                     # the window's Log button
+                ok = glog.open_in_editor()
+                return self.send_bytes(b"ok" if ok else b"no log yet", "text/plain")
             if self.path == "/shapes":                      # the drawn shapes, kept so they can be edited later
                 with open(os.path.join(CAP_DIR, "shapes.json"), "wb") as f:
                     f.write(body)
@@ -75,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
                 cmd = {"op": "mask", "cam": cam}
             elif self.path == "/cmd":
                 cmd = json.loads(body.decode("utf-8"))
+                if cmd.get("op") not in ("set", "shapes", "preview"):
+                    glog.info("sent to Unreal: %s" % cmd.get("op"))
             else:
                 return self.send_bytes(b"not found", "text/plain", 404)
             name = "%d.json" % time.time_ns()
@@ -84,6 +96,7 @@ class Handler(BaseHTTPRequestHandler):
             os.replace(tmp, os.path.join(CMD_DIR, name))
             self.send_bytes(b"ok", "text/plain")
         except Exception as e:
+            glog.error("request %s failed" % self.path)
             self.send_bytes(str(e).encode("utf-8"), "text/plain", 400)
 
 
@@ -93,6 +106,7 @@ def watchdog():
         time.sleep(2)
         now = time.time()
         if (last_ping[0] and now - last_ping[0] > 60) or (not last_ping[0] and now - started > 60):
+            glog.info("window closed (no ping for %d s); helper stops" % (now - (last_ping[0] or started)))
             os._exit(0)
 
 
@@ -103,8 +117,10 @@ def open_window(url):
            [os.path.join(p, r"Google\Chrome\Application\chrome.exe") for p in pf]
     for exe in exes:
         if os.path.exists(exe):
+            glog.info("window opened with " + exe)
             subprocess.Popen([exe, "--app=" + url, "--window-size=1760,1000"])
             return
+    glog.warn("Edge / Chrome not found; opening the default browser")
     webbrowser.open(url)
 
 
@@ -115,6 +131,7 @@ if __name__ == "__main__":
         except OSError:
             server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         port = server.server_address[1]
+        glog.info("helper started on port %d (Python %s)" % (port, sys.version.split()[0]))
         with open(os.path.join(CAP_DIR, "ui_port.txt"), "w") as f:
             f.write(str(port))
         threading.Thread(target=watchdog, daemon=True).start()
@@ -122,7 +139,5 @@ if __name__ == "__main__":
             open_window("http://127.0.0.1:%d/" % port)
         server.serve_forever()
     except Exception:
-        import traceback
-        with open(os.path.join(CAP_DIR, "ui_error.log"), "w") as f:
-            f.write(traceback.format_exc())
+        glog.error("helper crashed")
         raise
