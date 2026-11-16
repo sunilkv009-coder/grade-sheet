@@ -13,13 +13,14 @@ In Unreal a setup is:
     T_Mask_<id>      drawn-shape mask (R/G/B = layers A/B/C)
 so the grade switches on and off with its level. Setups are listed in <project>/Config/GradeSheetSetups.json.
 """
-import os, re, sys, json, glob, shutil, subprocess, traceback
+import os, re, sys, json, glob, time, shutil, subprocess, traceback
 import unreal
 import __main__
 
 PKG = "/Game/GradeSheet"                 # where the tool keeps its materials, grade instances and masks
 CAP_RES = (1280, 720)
-SETTLE_SEC, SHOT_SEC, ID_SEC = 4.0, 2.5, 1.0
+SETTLE_SEC, SHOT_SEC, ID_SEC = 4.0, 0.5, 1.0
+SHOT_TIMEOUT = 90.0                # a heavy scene can take a long time to render one high-resolution shot
 PARAM_NAMES = ["Blackpoint", "Whitepoint", "Lift", "Gain", "Multiply", "Offset", "Gamma",
                "Shadows", "Midtones", "Highlights"]
 PREFIXES = ["", "L1_", "L2_", "L3_"]
@@ -35,6 +36,7 @@ CFG = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.proje
 if not os.path.exists(CFG) and os.path.exists(os.path.join(PROJECT, "Scripts", "grade_setups.json")):
     shutil.copyfile(os.path.join(PROJECT, "Scripts", "grade_setups.json"), CFG)        # setups made before the plugin existed
 
+SHOT_DIRS = [os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Screenshots")]
 eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 mel = unreal.MaterialEditingLibrary
@@ -164,6 +166,7 @@ class Bridge(object):
         self.status = ""
         self.dirty_masks = set()
         self.preview_shots, self.preview_mark, self.preview_id, self.preview_key = [], None, 0, ""
+        self.shot_wait, self.missing = None, []
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -584,9 +587,49 @@ class Bridge(object):
             q += [("state", sid), ("wait", SETTLE_SEC), ("shot", sid, ""), ("wait", SHOT_SEC),
                   ("id", sid, True), ("wait", ID_SEC), ("shot", sid, "_id"), ("wait", SHOT_SEC), ("id", sid, False)]
         self.cap_queue, self.cap_until = q + [("done",)], 0.0
+        self.shot_wait, self.missing = None, []
         self.write_state("Capturing")
 
+    def find_shot(self, path, since):
+        """The screenshot asked for at time `since`: at `path`, or written by Unreal under another name or folder
+        (then it is moved to `path`). Returns True when the file is there and finished."""
+        base = os.path.splitext(os.path.basename(path))[0]
+        found = []
+        if os.path.exists(path) and os.path.getmtime(path) >= since - 1:
+            found.append(path)
+        for f in glob.glob(os.path.join(CAP_DIR, base + "*.png")):
+            if os.path.getmtime(f) >= since - 1 and f != path and not f.endswith(base + "_id.png") \
+                    and not os.path.basename(f)[len(base):].startswith("_id"):
+                found.append(f)
+        for d in SHOT_DIRS:
+            for f in glob.glob(os.path.join(d, "**", "*.png"), recursive=True):
+                if os.path.getmtime(f) >= since - 1:
+                    found.append(f)
+        for f in sorted(found, key=os.path.getmtime, reverse=True):
+            try:
+                size = os.path.getsize(f)
+                if size < 1000 or time.time() - os.path.getmtime(f) < 0.5:
+                    return False                                 # still being written
+                if f != path:
+                    shutil.move(f, path)
+                    unreal.log("GRADE_PANEL moved screenshot %s -> %s" % (f, path))
+                return True
+            except OSError:
+                return False
+        return False
+
     def capture_step(self):
+        if self.shot_wait:                                       # a screenshot was asked for: wait for its file
+            path, since, deadline = self.shot_wait
+            if self.find_shot(path, since):
+                self.shot_wait = None
+            elif self.t > deadline:
+                unreal.log_warning("GRADE_PANEL no screenshot file after %ds: %s (also looked in %s)"
+                                   % (SHOT_TIMEOUT, path, ", ".join(SHOT_DIRS)))
+                self.missing.append(os.path.basename(path))
+                self.shot_wait = None
+            else:
+                return
         if not self.cap_queue or self.t < self.cap_until:
             return
         step = self.cap_queue.pop(0)
@@ -600,6 +643,9 @@ class Bridge(object):
             restore_levels(self.rest_vis)
             les.eject_pilot_level_actor()
             self.capture_id += 1
+            if self.missing:
+                return self.write_state("Capture finished, but Unreal wrote no picture for %d shots (%s). "
+                                        "See the Output Log (GRADE_PANEL)." % (len(self.missing), ", ".join(self.missing[:4])))
             return self.write_state("Capture finished")
         s = self.setup(step[1])
         cam = self.cams.get(s["cam"]) if s else None
@@ -615,8 +661,12 @@ class Bridge(object):
             if not step[2]:
                 self.progress[0] += 1                            # this setup is finished
         elif kind == "shot":
-            unreal.AutomationLibrary.take_high_res_screenshot(
-                CAP_RES[0], CAP_RES[1], os.path.join(CAP_DIR, step[1] + step[2] + ".png"))
+            path = os.path.join(CAP_DIR, step[1] + step[2] + ".png")
+            if os.path.exists(path):
+                os.remove(path)                                  # so an old picture is never taken for the new one
+            unreal.AutomationLibrary.take_high_res_screenshot(CAP_RES[0], CAP_RES[1], path)
+            self.shot_wait = (path, time.time(), self.t + SHOT_TIMEOUT)
+            self.write_state("Capturing %s / %s%s" % (s["cam"], s["name"], " (part IDs)" if step[2] else ""))
 
     def preview_step(self):
         if self.preview_mark is not None and self.t >= self.preview_mark[0]:

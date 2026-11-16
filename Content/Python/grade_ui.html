@@ -547,7 +547,7 @@ function buildTiles() {
   S.cams.forEach((cam, i) => {
     const el = document.createElement("div"); el.className = "tile";
     el.innerHTML = '<div class="cv"><div class="zw"><canvas width="16" height="9"></canvas><svg preserveAspectRatio="none"></svg><div class="patch"></div></div>' +
-      '<div class="empty">No capture yet. Press Recapture all.</div>' +
+      '<div class="empty">No picture yet. Press Recapture all. If it stays empty, read the message at the top.</div>' +
       '<div class="wipe"><span class="wl">Before</span><span class="wr">After</span><i></i></div>' +
       '<div class="tools"><button class="fit" title="Back to the whole image">Fit</button>' +
       '<button class="full" title="Work on this camera alone. Click again (or press F) for all cameras.">Full view</button></div>' +
