@@ -377,6 +377,20 @@ class Bridge(object):
             les.set_current_level_by_name(s["target"])
             vol = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
             self.restore_current()
+            if vol and lname(vol.get_outer()) != s["target"]:
+                # Unreal could not make the level current (it locks read-only levels): try moving the volume
+                glog.warn("volume for %s was created in %s instead of %s; moving it" % (sid, lname(vol.get_outer()), s["target"]))
+                try:
+                    moved = unreal.EditorLevelUtils.move_actors_to_level([vol], level, False, False)
+                    vol = moved[0] if moved else vol
+                except Exception:
+                    glog.error("moving the volume failed")
+            if not vol or lname(vol.get_outer()) != s["target"]:
+                if vol:
+                    eas.destroy_actor(vol)
+                raise RuntimeError("%s is locked (Unreal locks levels that are read-only / not checked out), so the grade "
+                                   "volume could not be placed in it. Check the level out in Perforce or unlock it with the "
+                                   "padlock in the Levels panel, then open Cameras and levels and press Done again" % s["target"])
             vol.set_editor_property("unbound", True)
             self.ppvs[sid] = vol
         self.name_volume(s)
@@ -543,13 +557,39 @@ class Bridge(object):
             levels = sublevels()                                 # and only the levels the grades live in
             pkgs = list({levels[s["target"]].get_outermost().get_name(): levels[s["target"]].get_outermost()
                          for s in self.cfg["setups"] if s["target"] in levels}.values())
-            glog.info("save grades: %s and levels %s" % (PKG, ", ".join(p.get_name() for p in pkgs) or "none"))
-            if pkgs:
-                unreal.EditorLoadingAndSavingUtils.save_packages(pkgs, True)
+            problems = []
+            for st in self.cfg["setups"]:                        # every grade volume must be in its own level
+                vol = self.ppvs.get(st["id"])
+                where = lname(vol.get_outer()) if vol else None
+                if where != st["target"]:
+                    problems.append("%s / %s: %s" % (st["cam"], st["name"], "no grade volume (open Cameras and levels, "
+                                    "press Done)" if not where else "volume is in %s, not %s" % (where, st["target"])))
+            writable = []
+            for pk in pkgs:
+                f = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir()),
+                                 pk.get_name()[len("/Game/"):] + ".umap") if pk.get_name().startswith("/Game/") else ""
+                if f and os.path.exists(f) and not os.access(f, os.W_OK):
+                    problems.append("%s not saved: read-only, check it out in Perforce and press Save grades again"
+                                    % pk.get_name().split("/")[-1])
+                else:
+                    writable.append(pk)
+            glog.info("save grades: %s and levels %s" % (PKG, ", ".join(p.get_name() for p in writable) or "none"))
+            if writable:
+                unreal.EditorLoadingAndSavingUtils.save_packages(writable, True)
+            try:                                                 # anything Unreal still has unsaved?
+                still = set(p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages())
+                problems += ["%s not saved (see the Output Log)" % p.get_name().split("/")[-1]
+                             for p in writable if p.get_name() in still]
+            except Exception:
+                pass
             with open(os.path.join(CAP_DIR, "grades.json"), "w") as f:
                 json.dump(c.get("grades", {}), f, indent=1)
             self.save_cfg()
-            self.write_state("Saved %d grade setups and their levels" % len(self.cfg["setups"]))
+            for x in problems:
+                warn("save: " + x)
+            self.write_state(("Saved %d grade setups and their levels" % len(self.cfg["setups"])) if not problems else
+                             "NOT everything was saved. " + "; ".join(problems[:3]) + (" (+%d more, see Log)" % (len(problems) - 3)
+                                                                                     if len(problems) > 3 else ""))
         elif op == "preview":                                    # setup wizard: show this camera with these levels
             if self.cap_queue:
                 return

@@ -16,6 +16,9 @@
   #openname { color:var(--accent); margin-left:10px; }
   .su.cur { border-color:var(--accent); } .su button.primary { padding:0 12px; }
   #wimg { transition:opacity .15s; }
+  #banner { position:absolute; left:12px; right:362px; top:8px; z-index:20; display:none; gap:10px; align-items:flex-start;
+            background:#3a2a12; border:1px solid var(--warn); color:#ffd9a0; border-radius:10px; padding:10px 12px; font-size:13px; }
+  #banner.on { display:flex; } #banner span { flex:1; white-space:pre-wrap; } #banner button { padding:2px 9px; }
   #status { color:var(--mute); font-size:12px; padding:3px 10px; border-radius:99px; background:var(--panel2); min-height:22px; }
   .grow { flex:1; }
   button, select, input[type=text] { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
@@ -167,6 +170,7 @@
 </header>
 <main>
   <section id="grid"></section>
+  <div id="banner"><span></span><button title="Dismiss">&times;</button></div>
   <div id="busy">
     <svg viewBox="0 0 320 110" aria-hidden="true">
       <g class="smoke" fill="#8a92a6"><circle cx="80" cy="76" r="6"/><circle cx="80" cy="76" r="6"/><circle cx="80" cy="76" r="6"/></g>
@@ -1129,6 +1133,7 @@ setInterval(async () => {
   im.src = "/img/preview.png?t=" + Date.now();
 }, 500);
 $("setupbtn").onclick = openList;
+$("banner").lastChild.onclick = () => $("banner").classList.remove("on");
 $("logbtn").onclick = () => fetch("/openlog", { method:"POST" }).then(r => r.text()).then(t => toast(t === "ok" ? "Log opened in your text editor" : "No log yet")).catch(() => toast("Could not open the log"));
 $("busystop").onclick = () => { post({ op:"cancel" }); $("busysub").textContent = "Stopping..."; };
 $("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
@@ -1170,6 +1175,9 @@ async function poll() {
   if (!st && Date.now() - S.lastOk > 6000) lostLink();
   if (st) { S.lastOk = Date.now();
     if (Date.now() > S.toastUntil) $("status").textContent = st.status || (S.cams.length + " cameras");
+    // problems (save failed, setup errors) stay on screen until dismissed
+    if (st.status !== S.lastStatus) { S.lastStatus = st.status;
+      if (/^NOT everything|Errors?:|Error:|Skipped/.test(st.status || "")) { $("banner").firstChild.textContent = st.status; $("banner").classList.add("on"); } }
     $("recap").disabled = !!st.busy; showBusy(st.busy || S.waitReload, st);
     if (S.waitReload) { if (!st.busy && Date.now() - S.waitSince > 2500) return location.reload(); }
     else if (!st.busy && (st.setups || []).map(s => s.id).join() !== S.setups.map(s => s.id).join()) return location.reload();   // setups changed elsewhere
