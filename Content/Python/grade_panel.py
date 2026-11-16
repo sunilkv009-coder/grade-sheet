@@ -7,7 +7,8 @@ and applies what that window asks for, through JSON files in Saved/GradeCaptures
 GRADE SETUP = one named grade for one camera:
     camera + the levels that are active for it + the ONE level the grade lives in.
 In Unreal a setup is:
-    PPV_Grade_<id>   unbound post process volume, placed in the setup's target level
+    PPV_<Name>, PPV_Variant_<code-code> or PPV_<Name>_Variant_<code-code>
+                     unbound post process volume, placed in the setup's target level (see ppv_label)
     MI_Grade_<id>    instance of M_NukeGrade (whole frame + layers A, B, C)
     T_Mask_<id>      drawn-shape mask (R/G/B = layers A/B/C)
 so the grade switches on and off with its level. Setups are listed in <project>/Config/GradeSheetSetups.json.
@@ -82,6 +83,24 @@ def safe(s):
     return re.sub(r"[^A-Za-z0-9_]", "_", str(s)).strip("_") or "x"
 
 
+VOL_TAG = "GradeSheet:"            # actor tag "GradeSheet:<setup id>" ties a volume to its setup (labels can repeat)
+
+
+def ppv_label(s):
+    """Studio naming rule for post process volumes:
+         always-on grade            PPV_<Name>                        PPV_Badge
+         variant grade              PPV_Variant_<code-code>           PPV_Variant_8WF-9WF
+         named grade for a variant  PPV_<Name>_Variant_<code-code>    PPV_Badge_Variant_8WF-9WF"""
+    name = safe(s.get("name", "Grade"))
+    codes = [safe(v) for v in (s.get("variants") or {}).values()]
+    if not codes and s.get("variant"):
+        codes = [name]                                           # older setups: the setup is named like its variant
+    if not codes:
+        return "PPV_" + name
+    plain = name.lower() in [c.lower() for c in codes] + ["_".join(codes).lower()]
+    return ("PPV_" if plain else "PPV_" + name + "_") + "Variant_" + "-".join(codes)
+
+
 def set_id_view(cam, on):
     """Weight of M_StencilID on the camera (added once, other blendables are left alone). 1 = show stencil IDs."""
     comp = cam.get_cine_camera_component()
@@ -122,6 +141,9 @@ class Bridge(object):
             except Exception:
                 unreal.log_warning("GRADE_PANEL could not read " + CFG)
         self.scan()
+        renamed = [ppv_label(s) for s in self.cfg["setups"] if self.name_volume(s)]
+        if renamed:                                              # volumes from an older version get the studio names
+            unreal.log("GRADE_PANEL renamed volumes: " + ", ".join(renamed))
 
     def scan(self):
         """Cameras, grade volumes and stencil parts currently in the world."""
@@ -129,8 +151,12 @@ class Bridge(object):
         for a in eas.get_all_level_actors():
             if isinstance(a, unreal.CineCameraActor):
                 self.cams[a.get_actor_label()] = a
-            elif isinstance(a, unreal.PostProcessVolume) and a.get_actor_label().startswith("PPV_Grade_"):
-                self.ppvs[a.get_actor_label()[len("PPV_Grade_"):]] = a
+            elif isinstance(a, unreal.PostProcessVolume):
+                sid = next((str(t)[len(VOL_TAG):] for t in a.tags if str(t).startswith(VOL_TAG)), None)
+                if sid is None and a.get_actor_label().startswith("PPV_Grade_"):
+                    sid = a.get_actor_label()[len("PPV_Grade_"):]      # made by an older version: named PPV_Grade_<id>
+                if sid:
+                    self.ppvs[sid] = a
             elif isinstance(a, unreal.StaticMeshActor):
                 comp = a.static_mesh_component
                 if comp.get_editor_property("render_custom_depth"):
@@ -265,9 +291,9 @@ class Bridge(object):
             les.set_current_level_by_name(s["target"])
             vol = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
             les.set_current_level_by_name(lname(unreal.EditorLevelUtils.get_levels(get_world())[0]))
-            vol.set_actor_label("PPV_Grade_" + sid)
             vol.set_editor_property("unbound", True)
             self.ppvs[sid] = vol
+        self.name_volume(s)
         vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
         wb = unreal.WeightedBlendable()
         wb.set_editor_property("weight", 1.0)
@@ -277,6 +303,22 @@ class Bridge(object):
         settings = vol.get_editor_property("settings")
         settings.set_editor_property("weighted_blendables", wbs)
         vol.set_editor_property("settings", settings)
+
+    def name_volume(self, s):
+        """Give the setup's volume its studio name and its tag. Returns True if something changed."""
+        vol = self.ppvs.get(s["id"])
+        if not vol:
+            return False
+        label, tag = ppv_label(s), VOL_TAG + s["id"]
+        tags = [str(t) for t in vol.tags]
+        if vol.get_actor_label() == label and tag in tags:
+            return False
+        vol.modify()
+        if tag not in tags:
+            vol.tags = [t for t in tags if not t.startswith(VOL_TAG)] + [tag]
+        if vol.get_actor_label() != label:
+            vol.set_actor_label(label)
+        return True
 
     def remove_setup(self, sid):
         vol = self.ppvs.pop(sid, None)

@@ -53,9 +53,20 @@ For a setup named `Overall` on a camera `Cam_01`:
 
 | Thing | Name | Where |
 | --- | --- | --- |
-| Post process volume (unbound) | `PPV_Grade_Cam_01__Overall` | the level you chose for that camera |
+| Post process volume (unbound) | `PPV_Overall` (see naming below) | the level you chose for that camera |
 | Grade material instance | `MI_Grade_Cam_01__Overall` | `Content/GradeSheet` |
 | Drawn-shape mask texture | `T_Mask_Cam_01__Overall` | `Content/GradeSheet` |
+
+Post process volumes follow this naming rule:
+
+| Setup | Volume name | Example |
+| --- | --- | --- |
+| Always on | `PPV_<Name>` | `PPV_Badge` |
+| Tied to variants, named like the variant | `PPV_Variant_<code-code>` | `PPV_Variant_8WF-9WF` |
+| Tied to variants, with its own name | `PPV_<Name>_Variant_<code-code>` | `PPV_Badge_Variant_8WF-9WF` |
+
+Each camera's volume sits in that camera's level, so the same name can appear once per camera level. Volumes made
+by an older version (`PPV_Grade_...`) are renamed the next time you open the panel; save the levels afterwards.
 
 The grade switches on and off with its level, so no extra Blueprint logic is needed at runtime. A setup tied to a
 variant is left **disabled** at rest; enable the volume whose name ends with the active variant from your own
