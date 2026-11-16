@@ -77,6 +77,16 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 
 ## Good to know
 
+- **What it changes and saves in your project.** Nothing is saved until you press **Save grades**, and then only
+  the tool's own folder (`Content/GradeSheet`) and the levels your grade volumes live in. Showing and hiding levels
+  for previews and captures does not mark any level as changed, and level visibility and the current level are put
+  back the way you had them. The stencil ID view used for part picking sits on the tool's own grade volume, so
+  cameras are not touched. Switching Variant Manager variants for a capture can mark the car's level as changed;
+  the variant is switched back afterwards, so you can leave that level unsaved.
+- **Perforce / read-only levels.** Levels that are not checked out count as read-only. The setup wizard shows a
+  warning and an *Allow base / read-only levels* tick box instead of placing a grade there silently. Check those
+  levels out before **Save grades**.
+
 - The tiles are captured stills. After changing lighting, the model or a camera, press **Recapture all**.
 - Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
 - Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil

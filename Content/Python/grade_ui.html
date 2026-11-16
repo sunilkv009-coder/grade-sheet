@@ -909,11 +909,11 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const lvlOf = cam => (S.allCams.find(c => c.name === cam) || {}).level;
 const setupNames = () => [...new Set(S.setups.map(s => s.name))];
 const plain = s => ({ cam:s.cam, name:s.name, levels:[...s.levels], target:s.target, override:!!s.override, variant:!!s.variant, variants:{ ...(s.variants || {}) } });
-function protectedOk(level) {                 // base or read-only level: warn, and let the user override
+// base or read-only (not checked out) level: grades stay out of it unless the user ticks "allow" on the page.
+// (No browser pop-ups: they freeze the page, and the link to Unreal drops while one is open.)
+function protectedWhy(level) {
   const info = S.levels.find(l => l.name === level) || {};
-  if (!info.base && !info.readonly) return { ok:true, override:false };
-  const why = info.base ? "is a base level" : "is read-only (not checked out)";
-  return { ok:confirm(level + " " + why + ".\nGrades are normally kept out of it.\n\nAdd this grade there anyway?"), override:true };
+  return info.base ? "is a base level" : info.readonly ? "is read-only (not checked out)" : "";
 }
 function openList() { W = { mode:"list", msg:"", pkey:null, pid:-1 }; $("wiz").classList.add("open"); renderWizard(); }
 function closeWizard() { $("wiz").classList.remove("open"); post({ op:"eject" }); }
@@ -936,15 +936,15 @@ function initForm(cam) {
   // (with that camera's own level swapped for this one's); otherwise nothing is ticked
   const own = lvlOf(cam), have = new Set(S.levels.map(l => l.name)), e = W.entries[cam];
   const levels = e ? [...e.levels] : W.last ? [...new Set(W.last.levels.map(l => l === W.last.own ? own : l))].filter(l => have.has(l)) : [];
-  W.form = { cam, levels, target:e ? e.target : levels.includes(own) ? own : (levels[0] || "") };
+  W.form = { cam, levels, target:e ? e.target : levels.includes(own) ? own : (levels[0] || ""), override:!!(e && e.override) || !!(W.last && W.last.override) };
 }
 function saveForm() {                         // the page of one camera -> W.entries
   const f = W.form;
   if (!f.levels.length || !f.levels.includes(f.target)) { W.msg = "Tick the active levels and choose the level the grade lives in."; return false; }
-  const old = W.entries[f.cam], pr = old && old.target === f.target && old.override ? { ok:true, override:true } : protectedOk(f.target);
-  if (!pr.ok) { W.msg = "Choose another level for the grade."; return false; }
-  W.entries[f.cam] = { levels:[...f.levels], target:f.target, override:pr.override };
-  W.last = { levels:[...f.levels], own:lvlOf(f.cam) }; W.msg = "";
+  const why = protectedWhy(f.target);
+  if (why && !f.override) { W.msg = f.target + " " + why + ". Choose another level for the grade, or tick the box to allow it."; return false; }
+  W.entries[f.cam] = { levels:[...f.levels], target:f.target, override:!!why };
+  W.last = { levels:[...f.levels], own:lvlOf(f.cam), override:!!f.override }; W.msg = "";
   return true;
 }
 function finishWizard() {
@@ -956,9 +956,10 @@ function allCameras() {                       // same combination for every came
   const f = W.form, own = lvlOf(f.cam);
   if (!saveForm()) return renderWizard();
   if (f.target !== own) { W.msg = "For all cameras at once, the grade has to live in each camera's own level (here " + own + "). A grade in " + f.target + " is already active for every camera that uses that level."; return renderWizard(); }
+  const blocked = W.cams.filter(cam => cam !== f.cam && lvlOf(cam) && protectedWhy(lvlOf(cam)) && !f.override).map(lvlOf);
+  if (blocked.length) { W.msg = "These camera levels are base or read-only (not checked out): " + blocked.join(", ") + ". Tick the box to allow them."; return renderWizard(); }
   for (const cam of W.cams) { const o = lvlOf(cam); if (!o || cam === f.cam) continue;
-    const pr = protectedOk(o); if (!pr.ok) continue;
-    W.entries[cam] = { levels:[...new Set(f.levels.map(l => l === own ? o : l))], target:o, override:pr.override }; }
+    W.entries[cam] = { levels:[...new Set(f.levels.map(l => l === own ? o : l))], target:o, override:!!protectedWhy(o) }; }
   finishWizard();
 }
 function renderWizard() {
@@ -975,7 +976,9 @@ function renderWizard() {
       const row = el("div", "su" + (name === S.open ? " cur" : "")), open = el("button", "primary", "Open"), edit = el("button", "", "Cameras and levels"), x = el("button", "", "×");
       row.append(el("b", "", name), el("span", "", (Object.keys(mine[0].variants).length ? Object.entries(mine[0].variants).map(([k, v]) => k + ": " + v).join(", ") : mine.some(s => s.variant) ? "variant" : "always on") + "  |  " + mine.map(s => s.cam).join(", ")));
       open.onclick = () => openSetup(name); edit.onclick = () => startEdit(name); x.title = "Delete this setup";
-      x.onclick = () => { if (confirm("Delete " + name + "? Its grades are removed from " + mine.length + " camera level(s).")) sendConfig(S.setups.filter(s => s.name !== name).map(plain), S.open === name ? null : S.open); };
+      x.onclick = () => { if (x.dataset.armed !== "1") { x.dataset.armed = "1"; x.textContent = "Delete?"; x.title = "Click again to delete " + name + " from " + mine.length + " camera level(s)";
+          return setTimeout(() => { x.dataset.armed = ""; x.textContent = "×"; }, 3000); }
+        sendConfig(S.setups.filter(s => s.name !== name).map(plain), S.open === name ? null : S.open); };
       row.append(open, edit, x); body.appendChild(row); }
   } else if (W.mode === "name") {
     $("wtitle").textContent = "New grade setup"; $("wsub").textContent = "What is this grade for? It appears under this name in the list.";
@@ -1031,8 +1034,15 @@ function renderWizard() {
     dd.append(ddb, menu); frm.append(el("span", "", "Active levels"), dd);
     const sel = el("select");
     for (const l of f.levels) { const o = el("option", "", l); o.value = l; o.selected = l === f.target; sel.appendChild(o); }
-    sel.onchange = () => { f.target = sel.value; };
+    sel.onchange = () => { f.target = sel.value; renderWizard(); };
     frm.append(el("span", "", "Grade lives in"), sel);
+    const why = f.target && protectedWhy(f.target), prot = S.levels.some(l => (l.base || l.readonly) && f.levels.includes(l.name));
+    if (why || prot) { const ok = el("label", "ck"), cb = el("input"); cb.type = "checkbox"; cb.checked = !!f.override;
+      cb.onchange = () => { f.override = cb.checked; W.msg = ""; renderWizard(); };
+      ok.style.padding = "0"; ok.append(cb, "Allow base / read-only levels for the grade" + (why ? " (" + f.target + " " + why + ")" : ""));
+      frm.append(el("span", "", "Protected"), ok);
+      if (why) { const h = el("div", "hint", "Grades are normally kept out of base and not-checked-out levels. With this ticked, the grade volume is placed in "
+        + f.target + "; check the level out before you press Save grades."); h.style.color = "var(--warn)"; body.appendChild(h); } }
     if (n > 1) { const all = el("button", "", "Use this combination for all " + n + " cameras and finish"); all.onclick = allCameras;
       all.title = "Each camera gets the same levels, with its own camera level swapped in"; frm.append(el("span"), all); }
   }
@@ -1081,9 +1091,18 @@ $("wnext").onclick = () => {
 
 // ---------------------------------------------------------------- start + polling
 async function getJSON(url) { try { const r = await fetch(url + "?t=" + Date.now()); return r.ok ? await r.json() : null; } catch (e) { return null; } }
+S.lastOk = Date.now();
+function lostLink() {
+  $("busy").classList.add("on");
+  $("busytxt").textContent = "Lost the connection to Unreal";
+  $("busysub").textContent = "Close this window and open Grade Sheet again from the Unreal menu. Nothing has been saved.";
+  $("busybar").firstChild.style.width = "0%"; $("status").textContent = "Disconnected";
+  if (W && $("wiz").classList.contains("open")) $("wcap").textContent = "Lost the connection to Unreal. Close this window and open Grade Sheet again.";
+}
 async function poll() {
   const st = await getJSON("/state");
-  if (st) {
+  if (!st && Date.now() - S.lastOk > 6000) lostLink();
+  if (st) { S.lastOk = Date.now();
     if (Date.now() > S.toastUntil) $("status").textContent = st.status || (S.cams.length + " cameras");
     $("recap").disabled = !!st.busy; showBusy(st.busy || S.waitReload, st);
     if (S.waitReload) { if (!st.busy && Date.now() - S.waitSince > 2500) return location.reload(); }

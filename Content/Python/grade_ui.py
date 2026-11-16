@@ -92,7 +92,7 @@ def watchdog():
     while True:
         time.sleep(2)
         now = time.time()
-        if (last_ping[0] and now - last_ping[0] > 8) or (not last_ping[0] and now - started > 60):
+        if (last_ping[0] and now - last_ping[0] > 60) or (not last_ping[0] and now - started > 60):
             os._exit(0)
 
 

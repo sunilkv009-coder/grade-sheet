@@ -233,7 +233,13 @@ def ensure(pkg, tmp_dir):
             _build_id(mat)
         else:
             build_grade(mat, none_tex)
+        if name == "M_StencilID":
+            mat.set_editor_property("blendable_priority", 10000)   # runs after every other post process material
         eal.set_metadata_tag(mat, "GradeSheetVersion", VERSION)
         eal.save_asset(path, False)
         built.append(name)
+    idmat = eal.load_asset(pkg + "/M_StencilID")             # the ID view must run after every other post process
+    if idmat and idmat.get_editor_property("blendable_priority") != 10000:
+        idmat.set_editor_property("blendable_priority", 10000)
+        eal.save_asset(pkg + "/M_StencilID", False)
     return built

@@ -73,10 +73,41 @@ def level_info():
     return out
 
 
+_DONT_MODIFY = getattr(getattr(unreal, "LevelVisibilityDirtyMode", None), "DONT_MODIFY", None)
+
+
+def set_visible(level, on):
+    """Show or hide a level WITHOUT marking it as changed (so it never ends up in the save dialog)."""
+    if _DONT_MODIFY is not None:
+        try:
+            return unreal.EditorLevelUtils.set_level_visibility(level, on, False, _DONT_MODIFY)
+        except TypeError:
+            pass
+    unreal.EditorLevelUtils.set_level_visibility(level, on, False)
+
+
+def is_visible(level):
+    """True / False, or None when this engine version cannot tell (then visibility is always set)."""
+    try:
+        return bool(unreal.EditorLevelUtils.is_level_visible(level))
+    except Exception:
+        return None
+
+
 def show_levels(names):
     """names = levels to show (None = all)."""
     for n, l in sublevels().items():
-        unreal.EditorLevelUtils.set_level_visibility(l, names is None or n in names, False)
+        on = names is None or n in names
+        if is_visible(l) is not on:
+            set_visible(l, on)
+
+
+def restore_levels(vis):
+    """Put level visibility back the way it was when the panel opened (vis: name -> visible)."""
+    for n, l in sublevels().items():
+        on = vis.get(n) is not False                    # unknown = visible
+        if is_visible(l) is not on:
+            set_visible(l, on)
 
 
 def safe(s):
@@ -101,24 +132,25 @@ def ppv_label(s):
     return ("PPV_" if plain else "PPV_" + name + "_") + "Variant_" + "-".join(codes)
 
 
-def set_id_view(cam, on):
-    """Weight of M_StencilID on the camera (added once, other blendables are left alone). 1 = show stencil IDs."""
-    comp = cam.get_cine_camera_component()
-    pp = comp.get_editor_property("post_process_settings")
-    idmat = eal.load_asset(PKG + "/M_StencilID")
-    wbs = pp.get_editor_property("weighted_blendables")
-    arr = list(wbs.get_editor_property("array"))
-    mine = [b for b in arr if b.get_editor_property("object") == idmat]
-    if not mine:
-        wb = unreal.WeightedBlendable()
-        wb.set_editor_property("object", idmat)
-        arr.append(wb)
-        mine = [wb]
-    for b in mine:
-        b.set_editor_property("weight", 1.0 if on else 0.0)
-    wbs.set_editor_property("array", arr)
-    pp.set_editor_property("weighted_blendables", wbs)
-    comp.set_editor_property("post_process_settings", pp)
+def set_blendables(vol, mi, grade_w, id_w):
+    """The grade volume carries two materials: the grade (weight grade_w) and the stencil ID view (weight id_w).
+    Only the tool's own volume is touched, so only the level the grade lives in is changed."""
+    out = []
+    for obj, w in ((mi, grade_w), (eal.load_asset(PKG + "/M_StencilID"), id_w)):
+        if obj:
+            wb = unreal.WeightedBlendable()
+            wb.set_editor_property("weight", float(w))
+            wb.set_editor_property("object", obj)
+            out.append(wb)
+    wbs = unreal.WeightedBlendables()
+    wbs.set_editor_property("array", out)
+    settings = vol.get_editor_property("settings")
+    old = [(b.get_editor_property("object"), round(b.get_editor_property("weight"), 3))
+           for b in settings.get_editor_property("weighted_blendables").get_editor_property("array")]
+    if old == [(b.get_editor_property("object"), round(b.get_editor_property("weight"), 3)) for b in out]:
+        return                                                   # nothing to change
+    settings.set_editor_property("weighted_blendables", wbs)
+    vol.set_editor_property("settings", settings)
 
 
 class Bridge(object):
@@ -133,6 +165,12 @@ class Bridge(object):
         self.dirty_masks = set()
         self.preview_shots, self.preview_mark, self.preview_id, self.preview_key = [], None, 0, ""
         self.rest_variants, self.changed = {}, set()
+        self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
+        try:
+            cur = les.get_current_level()
+            self.rest_current = lname(cur) if cur else None
+        except Exception:
+            self.rest_current = None
         self.cfg = {"cameras": [], "setups": []}
         if os.path.exists(CFG):
             try:
@@ -175,8 +213,11 @@ class Bridge(object):
         return None
 
     def save_cfg(self):
-        with open(CFG, "w") as f:
-            json.dump(self.cfg, f, indent=1)
+        try:
+            with open(CFG, "w") as f:
+                json.dump(self.cfg, f, indent=1)
+        except OSError:
+            unreal.log_warning("GRADE_PANEL could not write %s (read-only? check it out)" % CFG)
 
     # ------------------------------------------------------------ grade instances
     def mi(self, sid):
@@ -265,7 +306,6 @@ class Bridge(object):
         if not eal.does_asset_exist(path):
             mat = eal.duplicate_asset(PKG + "/M_NukeGrade", path)
             mat.set_editor_property("blendable_priority", int(order))
-            eal.save_asset(path, False)
         return eal.load_asset(path)
 
     def ensure_setup(self, s):
@@ -278,7 +318,6 @@ class Bridge(object):
         base = self.base_material(int(s.get("order", 0)))
         if mi.get_editor_property("parent") != base:
             mel.set_material_instance_parent(mi, base)
-            eal.save_asset(PKG + "/MI_Grade_" + sid, False)
         vol = self.ppvs.get(sid)
         if vol and lname(vol.get_outer()) != s["target"]:
             eas.destroy_actor(vol)                               # target level changed: rebuild it there
@@ -287,22 +326,22 @@ class Bridge(object):
             level = sublevels().get(s["target"])
             if not level:
                 raise RuntimeError("Level %s is not loaded" % s["target"])
-            unreal.EditorLevelUtils.set_level_visibility(level, True, False)
+            if is_visible(level) is not True:
+                set_visible(level, True)
             les.set_current_level_by_name(s["target"])
             vol = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
-            les.set_current_level_by_name(lname(unreal.EditorLevelUtils.get_levels(get_world())[0]))
+            self.restore_current()
             vol.set_editor_property("unbound", True)
             self.ppvs[sid] = vol
         self.name_volume(s)
-        vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
-        wb = unreal.WeightedBlendable()
-        wb.set_editor_property("weight", 1.0)
-        wb.set_editor_property("object", mi)
-        wbs = unreal.WeightedBlendables()
-        wbs.set_editor_property("array", [wb])
-        settings = vol.get_editor_property("settings")
-        settings.set_editor_property("weighted_blendables", wbs)
-        vol.set_editor_property("settings", settings)
+        if vol.get_editor_property("priority") != 10.0 + float(s.get("order", 0)):
+            vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
+        set_blendables(vol, mi, 1.0, 0.0)
+
+    def restore_current(self):
+        """Give the user back the level that was current when the panel opened."""
+        name = self.rest_current if self.rest_current in sublevels() else None
+        les.set_current_level_by_name(name or lname(unreal.EditorLevelUtils.get_levels(get_world())[0]))
 
     def name_volume(self, s):
         """Give the setup's volume its studio name and its tag. Returns True if something changed."""
@@ -371,8 +410,6 @@ class Bridge(object):
                 self.ensure_setup(s)
             except Exception as e:
                 errors.append("%s: %s" % (s["name"], e))
-        for n in cams:
-            set_id_view(self.cams[n], False)
         self.rest_state()
         self.save_cfg()
         msg = "%d cameras, %d grade setups" % (len(cams), len(new))
@@ -436,14 +473,13 @@ class Bridge(object):
             self.write_state("Created level " + name)
         elif op == "save":
             for sid, layers in c.get("grades", {}).items():
-                if self.apply(sid, layers):
-                    eal.save_asset(PKG + "/MI_Grade_" + sid, False)
-            for path in sorted(self.dirty_masks):
-                eal.save_asset(path, False)
-            self.dirty_masks = set()
+                self.apply(sid, layers)
             self.rest_state()
-            levels = sublevels()
-            pkgs = [levels[s["target"]].get_outermost() for s in self.cfg["setups"] if s["target"] in levels]
+            eal.save_directory(PKG, True, True)                  # the tool's own folder, changed assets only
+            self.dirty_masks = set()
+            levels = sublevels()                                 # and only the levels the grades live in
+            pkgs = list({levels[s["target"]].get_outermost().get_name(): levels[s["target"]].get_outermost()
+                         for s in self.cfg["setups"] if s["target"] in levels}.values())
             if pkgs:
                 unreal.EditorLoadingAndSavingUtils.save_packages(pkgs, True)
             with open(os.path.join(CAP_DIR, "grades.json"), "w") as f:
@@ -470,7 +506,7 @@ class Bridge(object):
             les.eject_pilot_level_actor()
             self.rest_state()
             self.switch_variant(None)
-            show_levels(None)
+            restore_levels(self.rest_vis)
         elif op == "capture":
             self.scan()                                          # pick up newly assigned part IDs
             self.start_capture(c.get("ids"))
@@ -482,9 +518,12 @@ class Bridge(object):
             self.write_state("Ran " + os.path.basename(path))
 
     # ------------------------------------------------------------ capture: one still per setup, grades off
-    def enable_grades(self, on):
-        for vol in self.ppvs.values():
-            vol.set_editor_property("enabled", on)
+    def enable_grades(self, on, id_for=None):
+        """on=False: every grade off (volumes stay enabled, grade weight 0). id_for: that setup shows stencil IDs."""
+        for sid, vol in self.ppvs.items():
+            if not on and not vol.get_editor_property("enabled"):
+                vol.set_editor_property("enabled", True)
+            set_blendables(vol, self.mi(sid), 1.0 if on else 0.0, 1.0 if sid == id_for else 0.0)
 
     def rest_state(self, active=None):
         """Always-on setups enabled. A variant setup (for example a paint code) is enabled only while it is
@@ -492,7 +531,10 @@ class Bridge(object):
         for s in self.cfg["setups"]:
             vol = self.ppvs.get(s["id"])
             if vol:
-                vol.set_editor_property("enabled", (not s.get("variant")) or s["id"] == active)
+                set_blendables(vol, self.mi(s["id"]), 1.0, 0.0)
+                on = (not s.get("variant")) or s["id"] == active
+                if vol.get_editor_property("enabled") != on:
+                    vol.set_editor_property("enabled", on)
 
     def variant_sets(self):
         """Every Variant Manager table in the world: [(table name, [variants])]."""
@@ -555,7 +597,7 @@ class Bridge(object):
         if kind == "done":
             self.rest_state()
             self.switch_variant(None)
-            show_levels(None)
+            restore_levels(self.rest_vis)
             les.eject_pilot_level_actor()
             self.capture_id += 1
             return self.write_state("Capture finished")
@@ -569,7 +611,7 @@ class Bridge(object):
             les.pilot_level_actor(cam)                           # look through the camera while the lighting settles
             self.write_state("Capturing %s / %s" % (s["cam"], s["name"]))
         elif kind == "id":
-            set_id_view(cam, step[2])
+            self.enable_grades(False, s["id"] if step[2] else None)
             if not step[2]:
                 self.progress[0] += 1                            # this setup is finished
         elif kind == "shot":
