@@ -166,7 +166,8 @@ class Bridge(object):
         self.status = ""
         self.dirty_masks = set()
         self.preview_shots, self.preview_mark, self.preview_id, self.preview_key = [], None, 0, ""
-        self.shot_wait, self.missing = None, []
+        self.shot_wait, self.missing, self.shot_size, self.shot_shown = None, [], {}, -1
+        self.next_shot_check, self.throttle = 0.0, None
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -431,7 +432,7 @@ class Bridge(object):
             d = dict(s)
             d["layers"] = self.read_layers(s["id"])
             setups.append(d)
-        state = {"capture_id": self.capture_id, "status": self.status, "busy": bool(self.cap_queue),
+        state = {"capture_id": self.capture_id, "status": self.status, "busy": bool(self.cap_queue or self.shot_wait),
                  "preview_id": self.preview_id, "progress": getattr(self, "progress", [0, 0]), "preview_key": self.preview_key, "variant_sets": self.variant_tables(),
                  "parts": self.parts, "levels": level_info(), "max_cams": MAX_CAMS,
                  "all_cameras": [{"name": n, "level": lname(a.get_outer())} for n, a in sorted(self.cams.items())],
@@ -510,6 +511,11 @@ class Bridge(object):
             self.rest_state()
             self.switch_variant(None)
             restore_levels(self.rest_vis)
+        elif op == "cancel":                                     # Stop button while capturing
+            if self.cap_queue or self.shot_wait:
+                self.end_capture()
+                self.capture_id += 1
+                self.write_state("Capture stopped")
         elif op == "capture":
             self.scan()                                          # pick up newly assigned part IDs
             self.start_capture(c.get("ids"))
@@ -588,40 +594,70 @@ class Bridge(object):
                   ("id", sid, True), ("wait", ID_SEC), ("shot", sid, "_id"), ("wait", SHOT_SEC), ("id", sid, False)]
         self.cap_queue, self.cap_until = q + [("done",)], 0.0
         self.shot_wait, self.missing = None, []
+        self.keep_rendering(True)
         self.write_state("Capturing")
 
-    def find_shot(self, path, since):
-        """The screenshot asked for at time `since`: at `path`, or written by Unreal under another name or folder
+    def shot_snapshot(self):
+        """Every screenshot file that exists right now (so a new one can be told apart without comparing clocks)."""
+        out = set()
+        for d in [CAP_DIR] + SHOT_DIRS:
+            out.update(os.path.normcase(f) for f in glob.glob(os.path.join(d, "**", "*.png"), recursive=True))
+        return out
+
+    def find_shot(self, path, before):
+        """The screenshot just asked for: at `path`, or a new file Unreal wrote under another name or folder
         (then it is moved to `path`). Returns True when the file is there and finished."""
-        base = os.path.splitext(os.path.basename(path))[0]
-        found = []
-        if os.path.exists(path) and os.path.getmtime(path) >= since - 1:
-            found.append(path)
-        for f in glob.glob(os.path.join(CAP_DIR, base + "*.png")):
-            if os.path.getmtime(f) >= since - 1 and f != path and not f.endswith(base + "_id.png") \
-                    and not os.path.basename(f)[len(base):].startswith("_id"):
-                found.append(f)
-        for d in SHOT_DIRS:
-            for f in glob.glob(os.path.join(d, "**", "*.png"), recursive=True):
-                if os.path.getmtime(f) >= since - 1:
-                    found.append(f)
-        for f in sorted(found, key=os.path.getmtime, reverse=True):
-            try:
-                size = os.path.getsize(f)
-                if size < 1000 or time.time() - os.path.getmtime(f) < 0.5:
-                    return False                                 # still being written
-                if f != path:
-                    shutil.move(f, path)
-                    unreal.log("GRADE_PANEL moved screenshot %s -> %s" % (f, path))
-                return True
-            except OSError:
+        if os.path.exists(path):                                 # deleted before the request, so it is new
+            found = path
+        else:
+            skip = {os.path.normcase(os.path.join(CAP_DIR, n)) for n in ("preview.png",)}
+            new = [f for f in self.shot_snapshot() - before - skip
+                   if not os.path.basename(f).startswith(("mask_", "ref_"))]
+            if not new:
                 return False
-        return False
+            found = max(new, key=os.path.getmtime)
+        try:
+            size = os.path.getsize(found)
+            if size < 1000 or size != self.shot_size.get(found):
+                self.shot_size = {found: size}                   # still being written: check again next time
+                return False
+            if os.path.normcase(found) != os.path.normcase(path):
+                shutil.move(found, path)
+                unreal.log("GRADE_PANEL moved screenshot %s -> %s" % (found, path))
+            return True
+        except OSError:
+            return False
+
+    def keep_rendering(self, on):
+        """Unreal slows down when its window is not in front (the Grade Sheet window usually is), and then the
+        screenshots take very long. Switch that off while capturing and put the user's setting back afterwards."""
+        try:
+            perf = unreal.get_default_object(unreal.EditorPerformanceSettings)
+            if on:
+                if self.throttle is None:
+                    self.throttle = perf.get_editor_property("throttle_cpu_when_not_foreground")
+                perf.set_editor_property("throttle_cpu_when_not_foreground", False)
+            elif self.throttle is not None:
+                perf.set_editor_property("throttle_cpu_when_not_foreground", self.throttle)
+                self.throttle = None
+        except Exception:
+            pass
+
+    def end_capture(self):
+        self.cap_queue, self.shot_wait = [], None
+        self.rest_state()
+        self.switch_variant(None)
+        restore_levels(self.rest_vis)
+        les.eject_pilot_level_actor()
+        self.keep_rendering(False)
 
     def capture_step(self):
         if self.shot_wait:                                       # a screenshot was asked for: wait for its file
-            path, since, deadline = self.shot_wait
-            if self.find_shot(path, since):
+            path, before, deadline, label = self.shot_wait
+            if self.t < self.next_shot_check:
+                return
+            self.next_shot_check = self.t + 0.5
+            if self.find_shot(path, before):
                 self.shot_wait = None
             elif self.t > deadline:
                 unreal.log_warning("GRADE_PANEL no screenshot file after %ds: %s (also looked in %s)"
@@ -629,6 +665,10 @@ class Bridge(object):
                 self.missing.append(os.path.basename(path))
                 self.shot_wait = None
             else:
+                waited = int(self.t - (deadline - SHOT_TIMEOUT))
+                if waited >= 3 and waited != self.shot_shown:
+                    self.shot_shown = waited
+                    self.write_state("%s: waiting for Unreal to write the picture (%d s)" % (label, waited))
                 return
         if not self.cap_queue or self.t < self.cap_until:
             return
@@ -638,10 +678,7 @@ class Bridge(object):
             self.cap_until = self.t + step[1]
             return
         if kind == "done":
-            self.rest_state()
-            self.switch_variant(None)
-            restore_levels(self.rest_vis)
-            les.eject_pilot_level_actor()
+            self.end_capture()
             self.capture_id += 1
             if self.missing:
                 return self.write_state("Capture finished, but Unreal wrote no picture for %d shots (%s). "
@@ -664,9 +701,12 @@ class Bridge(object):
             path = os.path.join(CAP_DIR, step[1] + step[2] + ".png")
             if os.path.exists(path):
                 os.remove(path)                                  # so an old picture is never taken for the new one
+            label = "Capturing %s / %s%s" % (s["cam"], s["name"], " (part IDs)" if step[2] else "")
+            before = self.shot_snapshot()
             unreal.AutomationLibrary.take_high_res_screenshot(CAP_RES[0], CAP_RES[1], path)
-            self.shot_wait = (path, time.time(), self.t + SHOT_TIMEOUT)
-            self.write_state("Capturing %s / %s%s" % (s["cam"], s["name"], " (part IDs)" if step[2] else ""))
+            self.shot_wait, self.shot_size, self.shot_shown = (path, before, self.t + SHOT_TIMEOUT, label), {}, -1
+            self.next_shot_check = self.t + 0.5
+            self.write_state(label)
 
     def preview_step(self):
         if self.preview_mark is not None and self.t >= self.preview_mark[0]:

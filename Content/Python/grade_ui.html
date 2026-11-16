@@ -58,6 +58,7 @@
   #busy .smoke circle:nth-child(2) { animation-delay:.3s; } #busy .smoke circle:nth-child(3) { animation-delay:.6s; }
   @keyframes puff { 0% { opacity:.6; transform:translate(0, 0) scale(.5); } 100% { opacity:0; transform:translate(-52px, -12px) scale(2.4); } }
   #busytxt { font-size:14px; font-weight:600; } #busysub { color:var(--mute); font-size:12px; }
+  #busystop { margin-top:6px; display:none; } #busy.cap #busystop { display:inline-block; }
   #busybar { width:260px; height:4px; border-radius:2px; background:#2c3240; overflow:hidden; } #busybar i { display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease-out; }
   #grid.solo { grid-template-columns:1fr !important; }
   #grid.solo .tile { width:100%; max-width:calc((100vh - 150px) * 16 / 9); margin:0 auto; }
@@ -176,7 +177,7 @@
         <g class="wheel"><circle cx="150" cy="52" r="14" fill="#111" stroke="#5a6274" stroke-width="2"/><path d="M150 40 V64 M138 52 H162" stroke="#8a92a6" stroke-width="2"/></g>
       </g>
     </svg>
-    <div id="busytxt">Preparing your views</div><div id="busysub"></div><div id="busybar"><i></i></div>
+    <div id="busytxt">Preparing your views</div><div id="busysub"></div><div id="busybar"><i></i></div><button id="busystop" title="Stop capturing and give Unreal back as it was">Stop</button>
   </div>
   <aside>
     <div class="sec"><h2 id="camname">-</h2><div class="sub" id="camsub"></div>
@@ -659,6 +660,7 @@ function toggleSolo(i) { smooth(() => { if (S.sel !== i) { cancelDraw(); S.shape
 function showBusy(on, st) {
   $("busy").classList.toggle("on", !!on); if (!on) return;
   const pr = (st && st.progress) || [0, 0];
+  $("busy").classList.toggle("cap", !!(st && st.busy));
   $("busytxt").textContent = "Preparing your views";
   $("busysub").textContent = st && st.busy && st.status ? st.status + (pr[1] ? "  (" + Math.min(pr[0] + 1, pr[1]) + " of " + pr[1] + ")" : "") : "Setting up in Unreal";
   $("busybar").firstChild.style.width = (pr[1] ? Math.max(6, pr[0] / pr[1] * 100) : 6) + "%";
@@ -1070,6 +1072,7 @@ setInterval(async () => {
   im.src = "/img/preview.png?t=" + Date.now();
 }, 500);
 $("setupbtn").onclick = openList;
+$("busystop").onclick = () => { post({ op:"cancel" }); $("busysub").textContent = "Stopping..."; };
 $("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
 $("wback").onclick = () => { W.msg = "";
   if (W.mode === "cam") { if (W.step > 0) W.step--; else W.mode = "cams"; }
