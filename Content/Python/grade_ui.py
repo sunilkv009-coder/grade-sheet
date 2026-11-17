@@ -100,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(str(e).encode("utf-8"), "text/plain", 400)
 
 
+class Server(ThreadingHTTPServer):
+    request_queue_size = 64             # the page asks for every picture at once; the default of 5 can refuse some
+
+
 def watchdog():
     """Quit when the window has been closed (no ping for a while)."""
     while True:
@@ -127,9 +131,9 @@ def open_window(url):
 if __name__ == "__main__":
     try:
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+            server = Server(("127.0.0.1", PORT), Handler)
         except OSError:
-            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            server = Server(("127.0.0.1", 0), Handler)
         port = server.server_address[1]
         glog.info("helper started on port %d (Python %s)" % (port, sys.version.split()[0]))
         with open(os.path.join(CAP_DIR, "ui_port.txt"), "w") as f:
