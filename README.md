@@ -87,8 +87,9 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 
 - **What it changes and saves in your project.** Nothing is saved until you press **Save grades**, and then only
   the tool's own folder (`Content/GradeSheet`) and the levels your grade volumes live in. Showing and hiding levels
-  for previews and captures does not mark any level as changed, and level visibility and the current level are put
-  back the way you had them. The stencil ID view used for part picking sits on the tool's own grade volume, so
+  for previews and captures does not mark any level as changed, and the current level is put back the way you had
+  it. After a capture (or *Stop viewing*) the levels of the camera shown last stay visible and the others stay
+  hidden, so you do not have to switch levels off by hand. The stencil ID view used for part picking sits on the tool's own grade volume, so
   cameras are not touched. Switching Variant Manager variants for a capture can mark the car's level as changed;
   the variant is switched back afterwards, so you can leave that level unsaved.
 - **Perforce / read-only levels.** Levels that are not checked out count as read-only. The setup wizard shows a

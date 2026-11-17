@@ -207,6 +207,7 @@ class Bridge(object):
         self.slate_sleep, self.realtime = None, None       # editor settings changed for a capture (None = untouched)
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
         self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
+        self.last_levels = None                            # levels of the setup shown last (capture, or View in Unreal)
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -410,6 +411,15 @@ class Bridge(object):
         if vol.get_editor_property("priority") != 10.0 + float(s.get("order", 0)):
             vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
         set_blendables(vol, mi, 1.0, 0.0)
+
+    def leave_levels(self):
+        """When the tool is done looking through cameras, the levels of the setup it showed last stay visible and
+        the others stay hidden, so nobody has to switch levels off by hand afterwards. Only when no setup has been
+        shown yet (for example a wizard preview that was cancelled) do the levels go back to how the panel found them."""
+        if self.last_levels is not None:
+            show_levels(self.last_levels)
+        else:
+            restore_levels(self.rest_vis)
 
     def restore_current(self):
         """Give the user back the level that was current when the panel opened."""
@@ -621,6 +631,7 @@ class Bridge(object):
             s = self.setup(c["id"])
             if s and s["cam"] in self.cams:
                 show_levels(s["levels"])
+                self.last_levels = list(s["levels"])
                 self.rest_state(s["id"])
                 self.switch_variant(s)
                 les.pilot_level_actor(self.cams[s["cam"]])
@@ -628,7 +639,7 @@ class Bridge(object):
             les.eject_pilot_level_actor()
             self.rest_state()
             self.switch_variant(None)
-            restore_levels(self.rest_vis)
+            self.leave_levels()
         elif op == "cancel":                                     # Stop button while capturing
             if self.cap_queue or self.shot_wait:
                 self.end_capture()
@@ -815,7 +826,7 @@ class Bridge(object):
     def end_capture(self):
         """Give Unreal back the way it was. Each step on its own, so one failure never leaves the rest undone."""
         self.cap_queue, self.shot_wait = [], None
-        for step in (lambda: self.shot_frames(False), self.rest_state, lambda: self.switch_variant(None), lambda: restore_levels(self.rest_vis),
+        for step in (lambda: self.shot_frames(False), self.rest_state, lambda: self.switch_variant(None), self.leave_levels,
                      les.eject_pilot_level_actor, lambda: self.keep_rendering(False)):
             try:
                 step()
@@ -885,6 +896,7 @@ class Bridge(object):
             return
         if kind == "state":
             show_levels(s["levels"])
+            self.last_levels = list(s["levels"])
             self.switch_variant(s)
             les.pilot_level_actor(cam)                           # look through the camera while the lighting settles
             glog.info("  %s / %s: levels %s, variants %s" % (s["cam"], s["name"], ", ".join(s["levels"]),
