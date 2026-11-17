@@ -22,7 +22,7 @@ CAP_RES = (1280, 720)
 SETTLE_SEC, SHOT_SEC, ID_SEC = 4.0, 0.5, 1.0
 SHOT_TIMEOUT = 90.0                # a heavy scene can take a long time to render one high-resolution shot
 PARAM_NAMES = ["Blackpoint", "Whitepoint", "Lift", "Gain", "Multiply", "Offset", "Gamma",
-               "Shadows", "Midtones", "Highlights"]
+               "Shadows", "Midtones", "Highlights", "Saturation"]
 PREFIXES = ["", "L1_", "L2_", "L3_"]
 MAX_ID, MAX_CAMS = 255, 8
 WORDS = ["Mask"] + ["Mask%d" % j for j in range(1, 11)]   # 24 stencil IDs per scalar: IDs 1-24, 25-48, ... 241-255
@@ -200,6 +200,8 @@ class Bridge(object):
         self.preview_shots, self.preview_mark, self.preview_id, self.preview_key = [], None, 0, ""
         self.shot_wait, self.missing, self.shot_size, self.shot_shown = None, [], {}, -1
         self.next_shot_check, self.throttle = 0.0, None
+        self.slate_sleep, self.realtime = None, None       # editor settings changed for a capture (None = untouched)
+        self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -271,11 +273,17 @@ class Bridge(object):
         return eal.load_asset(path) if eal.does_asset_exist(path) else None
 
     def read_layers(self, sid):
-        mi, layers = self.mi(sid), []
+        mi, layers, have = self.mi(sid), [], set()
+        try:
+            have = set(str(n) for n in mel.get_vector_parameter_names(mi)) if mi else set()
+        except Exception:
+            pass
         for k, prefix in enumerate(PREFIXES):
             params, mask = {}, []
             if mi:
                 for p in PARAM_NAMES:
+                    if have and prefix + p not in have:
+                        continue                           # not in the material: the window uses the default
                     c = mel.get_material_instance_vector_parameter_value(mi, prefix + p)
                     params[p] = [c.r, c.g, c.b]
                 if k:
@@ -496,14 +504,19 @@ class Bridge(object):
             d["layers"] = self.read_layers(s["id"])
             setups.append(d)
         state = {"capture_id": self.capture_id, "status": self.status, "busy": bool(self.cap_queue or self.shot_wait),
-                 "preview_id": self.preview_id, "progress": getattr(self, "progress", [0, 0]), "preview_key": self.preview_key, "variant_sets": self.variant_tables(),
+                 "preview_id": self.preview_id, "progress": self.progress, "preview_key": self.preview_key, "variant_sets": self.variant_tables(),
                  "parts": self.parts, "levels": level_info(), "max_cams": MAX_CAMS,
                  "all_cameras": [{"name": n, "level": lname(a.get_outer())} for n, a in sorted(self.cams.items())],
                  "cameras": self.cfg["cameras"], "setups": setups}
         tmp = os.path.join(CAP_DIR, "state.json.tmp")
         with open(tmp, "w") as f:
             json.dump(state, f, indent=1)
-        os.replace(tmp, os.path.join(CAP_DIR, "state.json"))
+        for _ in range(25):
+            try:
+                return os.replace(tmp, os.path.join(CAP_DIR, "state.json"))
+            except PermissionError:                              # Windows: the window is reading the file this instant
+                time.sleep(0.01)
+        glog.warn("state.json was busy; the window gets the next update")
 
     # ------------------------------------------------------------ commands
     def handle_cmd(self, c):
@@ -687,6 +700,7 @@ class Bridge(object):
             return
         self.enable_grades(False)
         self.progress = [0, len(todo)]                           # setups captured so far, setups to capture
+        self.cap_ids = [s["id"] for s in todo]
         q = []
         for s in todo:
             sid = s["id"]
@@ -696,7 +710,7 @@ class Bridge(object):
         self.shot_wait, self.missing = None, []
         self.keep_rendering(True)
         self.cap_started = time.time()
-        glog.info("capture started: " + ", ".join(s["id"] for s in todo))
+        glog.info("capture started: " + ", ".join(self.cap_ids))
         self.write_state("Capturing")
 
     def shot_snapshot(self):
@@ -731,8 +745,11 @@ class Bridge(object):
             return False
 
     def keep_rendering(self, on):
-        """Unreal slows down when its window is not in front (the Grade Sheet window usually is), and then the
-        screenshots take very long. Switch that off while capturing and put the user's setting back afterwards."""
+        """While its window is not in front (the Grade Sheet window usually is), Unreal stops drawing: it uses
+        less CPU, its interface goes to sleep, and a viewport that is not Realtime is never drawn again, so a
+        requested screenshot is only taken once somebody clicks on Unreal. For the length of a capture all three
+        are switched off, and the user's own settings are put back afterwards."""
+        sl = unreal.SystemLibrary
         try:
             perf = unreal.get_default_object(unreal.EditorPerformanceSettings)
             if on:
@@ -743,23 +760,70 @@ class Bridge(object):
                 perf.set_editor_property("throttle_cpu_when_not_foreground", self.throttle)
                 self.throttle = None
         except Exception:
-            pass
+            glog.error("could not change 'use less CPU in background'")
+        try:                                                     # the editor interface must keep ticking
+            if on and self.slate_sleep is None:
+                try:
+                    self.slate_sleep = bool(sl.get_console_variable_bool_value("Slate.AllowSlateToSleep"))
+                except Exception:
+                    self.slate_sleep = True                      # the engine default
+                sl.execute_console_command(None, "Slate.AllowSlateToSleep 0")
+            elif not on and self.slate_sleep is not None:
+                sl.execute_console_command(None, "Slate.AllowSlateToSleep %d" % int(self.slate_sleep))
+                self.slate_sleep = None
+        except Exception:
+            glog.error("could not change Slate.AllowSlateToSleep")
+        try:                                                     # the viewport draws every frame (newer engines only)
+            get = getattr(les, "editor_get_viewport_realtime", None)
+            put = getattr(les, "editor_set_viewport_realtime", None)
+            if get and put:
+                if on and self.realtime is None:
+                    self.realtime = bool(get())
+                    if not self.realtime:
+                        put(True)
+                elif not on and self.realtime is not None:
+                    if not self.realtime:
+                        put(False)
+                    self.realtime = None
+        except Exception:
+            glog.error("could not change the viewport's Realtime setting")
+        if on:
+            glog.info("drawing in the background: on (use less CPU was %s, interface sleep was %s, Realtime was %s)" % (
+                self.throttle, self.slate_sleep, self.realtime))
 
     def end_capture(self):
+        """Give Unreal back the way it was. Each step on its own, so one failure never leaves the rest undone."""
         self.cap_queue, self.shot_wait = [], None
-        self.rest_state()
-        self.switch_variant(None)
-        restore_levels(self.rest_vis)
-        les.eject_pilot_level_actor()
-        self.keep_rendering(False)
+        for step in (self.rest_state, lambda: self.switch_variant(None), lambda: restore_levels(self.rest_vis),
+                     les.eject_pilot_level_actor, lambda: self.keep_rendering(False)):
+            try:
+                step()
+            except Exception:
+                glog.error("could not put everything back after the capture")
+
+    def stop(self):
+        """Stop for good: the window was closed, or Grade Sheet was opened again. A capture that is still running
+        is ended first, so levels, grades and editor settings are never left the way the capture had them.
+        Returns the ids of the setups that were not captured yet."""
+        left = []
+        if self.cap_queue or self.shot_wait:
+            left = self.cap_ids[self.progress[0]:]
+            glog.warn("capture ended early, not captured: " + (", ".join(left) or "none"))
+            self.end_capture()
+        self.alive = False
+        if self.handle is not None:
+            unreal.unregister_slate_post_tick_callback(self.handle)
+            self.handle = None
+        return left
 
     def capture_step(self):
+        if self.cap_queue or self.shot_wait:
+            redraw()                                             # every frame: the lighting settles, pending shots get taken
         if self.shot_wait:                                       # a screenshot was asked for: wait for its file
             path, before, deadline, label = self.shot_wait
             if self.t < self.next_shot_check:
                 return
             self.next_shot_check = self.t + 0.5
-            redraw()
             if self.find_shot(path, before):
                 glog.info("  picture written after %.1f s: %s" % (self.t - (deadline - SHOT_TIMEOUT), os.path.basename(path)))
                 self.shot_wait = None
@@ -786,7 +850,7 @@ class Bridge(object):
         if kind == "done":
             self.end_capture()
             glog.info("capture finished in %.0f s, missing pictures: %s" % (
-                time.time() - getattr(self, "cap_started", time.time()), ", ".join(self.missing) or "none"))
+                time.time() - self.cap_started, ", ".join(self.missing) or "none"))
             self.capture_id += 1
             if self.missing:
                 return self.write_state("Capture finished, but Unreal wrote no picture for %d shots (%s). "
@@ -833,10 +897,13 @@ class Bridge(object):
     # ------------------------------------------------------------ lifetime
     def tick(self, dt):
         try:
-            if not self.alive or (self.proc is not None and self.proc.poll() is not None):
-                unreal.unregister_slate_post_tick_callback(self.handle)   # window closed, or replaced
-                self.alive = False
+            gone = self.proc is not None and self.proc.poll() is not None      # the window was closed
+            if not self.alive or (gone and not (self.cap_queue or self.shot_wait)):
+                self.stop()
                 return
+            if gone and not self.gone_logged:                    # closed in the middle of a capture: finish it first
+                self.gone_logged = True
+                glog.info("the window was closed during a capture; Unreal finishes the capture on its own")
             self.t += dt
             self.capture_step()
             self.preview_step()
@@ -858,7 +925,13 @@ class Bridge(object):
                             pass
         except Exception:
             fail("error in the update loop; capture stopped")
-            self.cap_queue, self.shot_wait = [], None
+            try:
+                if self.cap_queue or self.shot_wait:             # tell the window, and give Unreal back as it was
+                    self.end_capture()
+                    self.capture_id += 1
+                    self.write_state("Error: the capture stopped. See Grade Sheet > Open log")
+            except Exception:
+                self.cap_queue, self.shot_wait = [], None
 
     def start(self):
         try:
@@ -901,15 +974,22 @@ class Bridge(object):
         self.handle = unreal.register_slate_post_tick_callback(self.tick)
 
 
+# The menu runs this file with runpy, which gives every run its own throw-away __main__ module, so the running
+# panel cannot be kept there: it would never be found again, and opening Grade Sheet a second time would leave the
+# first panel running next to the new one. This holder stays for the whole editor session.
+SESSION = sys.modules.setdefault("_grade_sheet_session", type(sys)("_grade_sheet_session"))
 try:
-    old = getattr(__main__, "_grade_bridge", None)
+    old, left = getattr(SESSION, "bridge", None) or getattr(__main__, "_grade_bridge", None), []
     if old is not None:
-        old.alive = False                      # old one unregisters itself on its next tick
+        if hasattr(old, "stop"):
+            left = old.stop()                  # ends a capture that is still running and puts Unreal back first
+        old.alive = False
         if old.proc is not None and old.proc.poll() is None:
             old.proc.terminate()
-    __main__._grade_bridge = Bridge()
-    __main__._grade_bridge.start()
-    info("started: %d cameras in the level, %d grade setups" % (
-        len(__main__._grade_bridge.cams), len(__main__._grade_bridge.cfg["setups"])))
+    SESSION.bridge = Bridge()
+    SESSION.bridge.start()
+    if left:                                   # reopened in the middle of a capture: carry on with the rest
+        SESSION.bridge.start_capture(left)
+    info("started: %d cameras in the level, %d grade setups" % (len(SESSION.bridge.cams), len(SESSION.bridge.cfg["setups"])))
 except Exception:
     fail("could not start")

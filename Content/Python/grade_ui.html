@@ -127,7 +127,14 @@
   .row { padding:7px 0; }
   .rh { display:flex; align-items:center; gap:8px; margin-bottom:3px; }
   .rh .nm { font-weight:500; cursor:default; }
-  .rh output { margin-left:auto; min-width:44px; text-align:right; font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--mute); }
+  /* typed values: one box per control, and one per channel under RGB */
+  input.val { width:62px; height:20px; padding:0 6px; text-align:right; font-family:ui-monospace,Consolas,monospace; font-size:11px;
+              color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:5px; -moz-appearance:textfield; }
+  input.val:hover { border-color:#3a4152; } input.val:focus { outline:none; border-color:var(--accent); }
+  input.val::-webkit-outer-spin-button, input.val::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+  input.val.r { color:var(--r); } input.val.g { color:var(--g); } input.val.b { color:var(--b); }
+  .rh .val { margin-left:auto; }
+  .tr { display:flex; align-items:center; gap:8px; } .tr input[type=range] { flex:1; min-width:0; }
   .rst { padding:0 5px; height:18px; font-size:12px; line-height:1; border-radius:5px; color:var(--mute); }
   .rgbbtn { padding:0 6px; font-size:10px; border-radius:5px; color:var(--mute); height:18px; }
   .trims { display:none; margin-top:2px; } .trims.open { display:block; }
@@ -236,10 +243,12 @@
 
 <script>
 "use strict";
-// name, default, master min, master max
+// name, default, slider min, slider max (a typed value may go beyond the slider), single = no per-channel values
 const P = [["Blackpoint",0,-0.25,0.5],["Whitepoint",1,0.25,2],["Lift",0,-0.25,0.25],["Gain",1,0,2],
            ["Multiply",1,0,3],["Offset",0,-0.25,0.25],["Gamma",1,0.2,3],
-           ["Shadows",1,0,2],["Midtones",1,0,2],["Highlights",1,0,2]];
+           ["Shadows",1,0,2],["Midtones",1,0,2],["Highlights",1,0,2],
+           ["Saturation",1,0,2,true]];
+const NP = P.length, SAT = P.findIndex(p => p[0] === "Saturation");
 const LAYERS = ["Whole frame","Layer A","Layer B","Layer C"];
 const NL = LAYERS.length, TRIM = 0.5, PATCH = 4, MAXID = 256;
 const $ = id => document.getElementById(id);
@@ -279,13 +288,15 @@ function gradeCh(x, p, c) {
   const b = p.Offset[c] + p.Lift[c] - a * p.Blackpoint[c];
   return Math.pow(Math.max(a * x + b, 0), 1 / Math.max(p.Gamma[c], 1e-3));
 }
-// grade + tonal ranges (shadows / midtones / highlights weighted by the graded luminance, like Nuke ColorCorrect)
+// grade + tonal ranges (shadows / midtones / highlights weighted by the graded luminance, like Nuke ColorCorrect) + saturation
 function gradeRGB(rgb, p) {
   const g = rgb.map((x, c) => gradeCh(x, p, c));
   const l = Math.min(1, Math.max(0, 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2]));
   const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   const ws = 1 - ss(0, 0.35, l), wh = ss(0.55, 1, l), wm = 1 - ws - wh;
-  return g.map((v, c) => v * (ws * p.Shadows[c] + wm * p.Midtones[c] + wh * p.Highlights[c]));
+  const t = g.map((v, c) => v * (ws * p.Shadows[c] + wm * p.Midtones[c] + wh * p.Highlights[c]));
+  const lt = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];          // saturation last: 1 = unchanged, 0 = grey
+  return t.map((v, c) => Math.max(0, lt + (v - lt) * p.Saturation[c]));
 }
 // mask of layer k at a pixel: (parts, if chosen) x (shapes, if drawn); 0 if the layer has neither
 function layerMask(su, k, id, sv) {
@@ -308,9 +319,9 @@ precision highp float;
 in vec2 v; out vec4 o;
 uniform sampler2D uImg; uniform sampler2D uId; uniform sampler2D uShape; uniform sampler2D uRaw;
 uniform sampler2D uRef; uniform vec4 uRefFit; uniform int uLeft;
-uniform vec3 uP[40]; uniform sampler2D uLut; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
+uniform vec3 uP[${NL * NP}]; uniform sampler2D uLut; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
 vec3 grade(vec3 x, int k){
-  int b = k * 10;
+  int b = k * ${NP};
   vec3 den = uP[b+1] - uP[b];
   den = mix(vec3(1e-5), den, step(vec3(1e-5), abs(den)));
   vec3 A = uP[b+4] * (uP[b+3] - uP[b+2]) / den;
@@ -318,7 +329,9 @@ vec3 grade(vec3 x, int k){
   vec3 y = pow(max(A * x + B, vec3(0.)), 1. / max(uP[b+6], vec3(1e-3)));
   float l = clamp(dot(y, vec3(.2126, .7152, .0722)), 0., 1.);
   float ws = 1. - smoothstep(0., .35, l), wh = smoothstep(.55, 1., l);
-  return y * (ws * uP[b+7] + (1. - ws - wh) * uP[b+8] + wh * uP[b+9]);
+  vec3 t = y * (ws * uP[b+7] + (1. - ws - wh) * uP[b+8] + wh * uP[b+9]);
+  float lt = dot(t, vec3(.2126, .7152, .0722));
+  return max(vec3(lt) + (t - lt) * uP[b+${SAT}], vec3(0.));
 }
 float lmask(int k, vec3 m, vec3 s){
   float up = uUse[(k-1)*2], us = uUse[(k-1)*2+1];
@@ -387,9 +400,9 @@ function draw(cam) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, last ? null : cam.fbo[i % 2].fb);
     gl.viewport(0, 0, su.w, su.h);
     bind(0, i === 0 ? su.tex.img : cam.fbo[(i - 1) % 2].tex); bind(1, su.tex.id); bind(2, pp.tex.mask); bind(3, su.tex.img); bind(4, su.tex.ref);
-    const up = new Float32Array(NL * P.length * 3), um = new Uint8Array(MAXID * 4), uu = new Float32Array(6);
+    const up = new Float32Array(NL * NP * 3), um = new Uint8Array(MAXID * 4), uu = new Float32Array(6);
     pp.layers.forEach((L, k) => {
-      P.forEach((p, j) => up.set(L.params[p[0]], (k * P.length + j) * 3));
+      P.forEach((p, j) => up.set(L.params[p[0]], (k * NP + j) * 3));
       if (!k) return;
       for (const id of L.mask) if (id >= 0 && id < MAXID) um[id * 4 + k - 1] = 255;
       uu[(k - 1) * 2] = L.mask.length ? 1 : 0; uu[(k - 1) * 2 + 1] = hasShape(pp, k) ? 1 : 0;
@@ -722,7 +735,7 @@ function refresh() {
   syncOutputs();
 }
 document.addEventListener("keydown", e => {
-  if ($("wiz").classList.contains("open") || (e.target.tagName === "INPUT" && e.target.type === "text")) return;
+  if ($("wiz").classList.contains("open") || (e.target.tagName === "INPUT" && (e.target.type === "text" || e.target.type === "number"))) return;
   if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") { e.preventDefault(); return e.shiftKey ? redoStep() : undoStep(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); return redoStep(); }
   if (e.target.tagName === "INPUT") return;
@@ -737,38 +750,59 @@ document.addEventListener("keydown", e => {
 "use strict";
 // ---------------------------------------------------------------- side panel
 const rows = {};
+// Every control has a slider and a box to type the exact value in. The box takes any number, also one beyond the
+// slider's range. Per row: base = the master value, off = each channel's distance from it (value = base + off).
+const fmt = x => { const t = (+x).toFixed(4); return t.endsWith("0") ? t.slice(0, -1) : t; };       // 3 decimals, 4 when needed
 function buildPanel() {
   const tabs = $("tabs");
   LAYERS.forEach((n, k) => { const b = document.createElement("button"); b.textContent = n;
     b.onclick = () => { cancelDraw(); S.layer = k; S.shape = -1; if (!k) S.tool = "none"; syncPanel(); refresh(); }; tabs.appendChild(b); });
-  const box = $("sliders");
-  for (const [name, def, lo, hi] of P) {
-    if (name === "Shadows") { const h = document.createElement("p"); h.className = "lbl sp"; h.textContent = "Tonal ranges"; box.appendChild(h); }
+  const box = $("sliders"), VT = "Type a value and press Enter (Esc cancels). Arrow up / down: 0.001 steps, with Shift 0.01";
+  for (const [name, def, lo, hi, single] of P) {
+    const head = name === "Shadows" ? "Tonal ranges" : name === "Saturation" ? "Colour" : "";
+    if (head) { const h = document.createElement("p"); h.className = "lbl sp"; h.textContent = head; box.appendChild(h); }
     const row = document.createElement("div"); row.className = "row";
     row.innerHTML = '<div class="rh"><span class="nm" title="Double-click to reset">' + name + '</span>' +
-      '<button class="rgbbtn" title="Per-channel trim">RGB</button><output></output>' +
+      (single ? '' : '<button class="rgbbtn" title="Per-channel values">RGB</button>') +
+      '<input type="number" class="val mv" step="any" title="' + VT + '">' +
       '<button class="rst" title="Reset this control (or Ctrl+click the slider)">&#8634;</button></div>' +
       '<input type="range" class="m" min="' + lo + '" max="' + hi + '" step="0.005">' +
-      '<div class="trims">' + ["r","g","b"].map(c => '<input type="range" class="' + c + '" min="' + (-TRIM) + '" max="' + TRIM + '" step="0.005">').join("") + '</div>';
+      '<div class="trims">' + (single ? [] : ["r","g","b"]).map(c => '<div class="tr"><input type="range" class="' + c + '" min="' + (-TRIM) + '" max="' + TRIM + '" step="0.005">' +
+        '<input type="number" class="val ' + c + '" step="any" title="' + { r:"Red", g:"Green", b:"Blue" }[c] + ' channel value. ' + VT + '"></div>').join("") + '</div>';
     box.appendChild(row);
-    const r = rows[name] = { m:row.querySelector(".m"), t:[...row.querySelectorAll(".trims input")], out:row.querySelector("output"),
-                             trims:row.querySelector(".trims") };
-    const onIn = () => { if (!cur()) return;
-      const m = +r.m.value; cur().layers[S.layer].params[name] = r.t.map(t => m + +t.value); refresh(); pushSoon(); };
-    r.m.addEventListener("input", onIn); r.t.forEach(t => t.addEventListener("input", onIn));
-    row.querySelector(".rgbbtn").onclick = () => r.trims.classList.toggle("open");
+    const r = rows[name] = { m:row.querySelector(".m"), t:[...row.querySelectorAll(".trims input[type=range]")], mv:row.querySelector(".mv"),
+                             tv:[...row.querySelectorAll(".trims .val")], trims:row.querySelector(".trims"), base:def, off:[0, 0, 0] };
+    const put = () => { if (!cur()) return; cur().layers[S.layer].params[name] = r.off.map(o => r.base + o); refresh(); pushSoon(); };
+    r.m.addEventListener("input", () => { r.base = +r.m.value; put(); });
+    r.t.forEach((t, c) => t.addEventListener("input", () => { r.off[c] = +t.value; put(); }));
+    // a typed value: the master box moves all three channels together, a channel box sets that channel alone
+    const typed = (inp, c) => { const su = cur(), x = parseFloat(inp.value), v = su && su.layers[S.layer].params[name];
+      if (!su || !isFinite(x)) return syncOutputs(true);                              // not a number: show the old value again
+      if (fmt(x) === fmt(c < 0 ? r.base : v[c])) return;                              // nothing changed
+      su.layers[S.layer].params[name] = c < 0 ? r.off.map(o => x + o) : v.map((o, j) => j === c ? x : o);
+      syncPanel(); refresh(); pushSoon(); };
+    [r.mv, ...r.tv].forEach((inp, j) => { const c = j - 1;
+      inp.addEventListener("change", () => typed(inp, c));
+      inp.addEventListener("focus", () => inp.select());
+      inp.addEventListener("keydown", e => {
+        if (e.key === "Enter") inp.blur();
+        else if (e.key === "Escape") { syncOutputs(true); inp.blur(); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); const x = parseFloat(inp.value); if (!isFinite(x)) return;
+          inp.value = fmt(x + (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 0.01 : 0.001)); typed(inp, c); } }); });
+    const rgb = row.querySelector(".rgbbtn"); if (rgb) rgb.onclick = () => r.trims.classList.toggle("open");
     const resetParam = () => { if (!cur()) return; cur().layers[S.layer].params[name] = [def, def, def]; syncPanel(); refresh(); pushSoon(); };
     row.querySelector(".nm").ondblclick = resetParam; row.querySelector(".rst").onclick = resetParam;
     r.m.addEventListener("pointerdown", e => { if (e.ctrlKey) { e.preventDefault(); resetParam(); } });                 // Ctrl+click: back to default
     r.t.forEach(t => t.addEventListener("pointerdown", e => { if (!e.ctrlKey || !cur()) return; e.preventDefault();      // Ctrl+click a trim: remove the trims
-      const m = +r.m.value; cur().layers[S.layer].params[name] = [m, m, m]; syncPanel(); refresh(); pushSoon(); }));
+      cur().layers[S.layer].params[name] = [r.base, r.base, r.base]; syncPanel(); refresh(); pushSoon(); }));
   }
 }
-function syncOutputs() {
+// the value boxes follow the sliders (the box being typed in is left alone, unless force)
+function syncOutputs(force) {
   const su = cur(); if (!su) return;
+  const set = (inp, x) => { if (force || document.activeElement !== inp) inp.value = fmt(x); };
   for (const [name] of P) { const v = su.layers[S.layer].params[name], r = rows[name];
-    const same = Math.abs(v[0] - v[1]) < 5e-4 && Math.abs(v[1] - v[2]) < 5e-4;
-    r.out.textContent = same ? v[0].toFixed(3) : v.map(x => x.toFixed(2)).join("  "); }
+    set(r.mv, r.base); r.tv.forEach((t, c) => set(t, v[c])); }
 }
 // active levels of the open setup for this camera: tick or untick, then apply (the camera is recaptured)
 function levelEditor() {
@@ -800,9 +834,10 @@ function syncPanel() {
     const ns = k ? su.shapes.filter(x => x.layer === k && x.closed).length : 0, np = k ? su.layers[k].mask.length : 0;
     b.textContent = LAYERS[k] + (ns || np ? " •" : ""); b.title = !k ? "Grades the whole frame" : (ns + " shape(s), " + np + " part(s)"); });
   const L = su.layers[S.layer];
-  for (const [name] of P) { const v = L.params[name], r = rows[name], m = (v[0] + v[1] + v[2]) / 3;
+  for (const [name] of P) { const v = L.params[name], r = rows[name], m = v[0] === v[1] && v[1] === v[2] ? v[0] : (v[0] + v[1] + v[2]) / 3;
+    r.base = m; r.off = v.map(x => x - m);                 // the exact values; the sliders show them as far as their range goes
     r.m.value = m; r.t.forEach((t, c) => t.value = v[c] - m);
-    if (v.some(x => Math.abs(x - m) > 5e-4)) r.trims.classList.add("open"); }
+    if (r.t.length && v.some(x => Math.abs(x - m) > 5e-4)) r.trims.classList.add("open"); }
   $("maskbox").style.display = S.layer ? "block" : "none";
   $("pick").classList.toggle("on", S.tool === "pick"); $("show").classList.toggle("on", S.show);
   $("drawbtn").classList.toggle("on", S.tool === "draw");

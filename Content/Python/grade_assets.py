@@ -4,6 +4,7 @@ and engine version without shipping .uasset files.
     M_NukeGrade   post process grade: whole frame + layers A, B, C
                   each layer = Nuke Grade (blackpoint, whitepoint, lift, gain, multiply, offset, gamma)
                                + tonal gains (shadows, midtones, highlights)
+                               + saturation (applied last, around the Rec.709 luminance)
                   each layer's mask = (stencil parts / background, if chosen) x (drawn shapes, if drawn)
     M_StencilID   shows custom stencil IDs as colour (used for the part picker capture)
     T_Mask_None   black default for the drawn-shape mask
@@ -11,10 +12,10 @@ and engine version without shipping .uasset files.
 import os, struct, zlib
 import unreal
 
-VERSION = "5"                      # bump to rebuild the materials in existing projects
+VERSION = "6"                      # bump to rebuild the materials in existing projects
 PARAMS = [("Blackpoint", 0.0), ("Whitepoint", 1.0), ("Lift", 0.0), ("Gain", 1.0),
           ("Multiply", 1.0), ("Offset", 0.0), ("Gamma", 1.0),
-          ("Shadows", 1.0), ("Midtones", 1.0), ("Highlights", 1.0)]
+          ("Shadows", 1.0), ("Midtones", 1.0), ("Highlights", 1.0), ("Saturation", 1.0)]
 LAYERS = [("", "0 Whole frame"), ("L1_", "1 Layer A"), ("L2_", "2 Layer B"), ("L3_", "3 Layer C")]
 mel = unreal.MaterialEditingLibrary
 eal = unreal.EditorAssetLibrary
@@ -172,7 +173,11 @@ def build_grade(mat, none_tex):
         wm = op(S, op(S, one, ws, 100, y0 + 700), wh, 200, y0 + 700)
         gain = op(A, op(A, op(M, p["Shadows"], ws, 300, y0 + 400), op(M, p["Midtones"], wm, 300, y0 + 700), 450, y0 + 500),
                   op(M, p["Highlights"], wh, 300, y0 + 550), 600, y0 + 500)
-        return op(M, g, gain, 750, y0)
+        toned = op(M, g, gain, 750, y0)
+        # saturation: out = max(luma + (colour - luma) * saturation, 0)    (1 = unchanged, 0 = grey)
+        lum = op(unreal.MaterialExpressionDotProduct, toned, luma, 900, y0 + 200)
+        return op(unreal.MaterialExpressionMax,
+                  op(A, op(M, op(S, toned, lum, 1050, y0), p["Saturation"], 1200, y0), lum, 1350, y0), zero, 1500, y0)
 
     out = grade(x, LAYERS[0][0], LAYERS[0][1], 0)
     for k, (prefix, group) in enumerate(LAYERS[1:]):
@@ -193,7 +198,7 @@ def build_grade(mat, none_tex):
         sm = lerp(one, chan(shape, "RGB", "rgb"[k], -1750, y0 - 300), use_shape, -1550, y0 - 300)
         mask = op(M, op(M, pm, sm, -1350, y0 - 400), op(unreal.MaterialExpressionMax, use_parts, use_shape, -1550, y0 - 150),
                   -1150, y0 - 400)
-        out = lerp(out, grade(out, prefix, group, y0), mask, 950, y0)
+        out = lerp(out, grade(out, prefix, group, y0), mask, 1700, y0)
     mel.connect_material_property(out, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     mel.recompile_material(mat)
 

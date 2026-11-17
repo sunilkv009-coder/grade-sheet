@@ -37,7 +37,11 @@ Plugin* and *Editor Scripting Utilities* for you.
 ## What you can do
 
 - **Grade** with Nuke-style controls: blackpoint, whitepoint, lift, gain, multiply, offset, gamma, plus shadows,
-  midtones and highlights. Each has per-channel RGB trims.
+  midtones and highlights, each with per-channel RGB values, and **saturation** (applied last in its layer;
+  1 = unchanged, 0 = grey).
+- **Exact values**: every control has a box next to its slider. Type a number and press Enter; it may go beyond
+  the slider's range. Arrow up / down steps by 0.001 (0.01 with Shift), Esc cancels. Under **RGB** each channel has
+  its own box.
 - **Four layers per camera**: the whole frame, and layers A, B and C that only act inside a mask.
 - **Mask by part** (click parts in the image, or tick whole levels or the background) and **by drawn bezier shapes**
   with per-shape feather. A layer with both grades the chosen parts only inside the shapes.
@@ -91,6 +95,10 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
   warning and an *Allow base / read-only levels* tick box instead of placing a grade there silently. Check those
   levels out before **Save grades**.
 
+- **Captures while the window is in front.** For the length of a capture the tool keeps Unreal drawing in the
+  background (it switches off *Use Less CPU when in Background* and the interface's sleep, and turns the viewport's
+  Realtime on) and puts your settings back afterwards. If you close the window during a capture, Unreal finishes
+  the capture on its own; if you open Grade Sheet again meanwhile, it carries on with the cameras that are left.
 - The tiles are captured stills. After changing lighting, the model or a camera, press **Recapture all**.
 - Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
 - Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil
