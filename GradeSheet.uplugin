@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0",
+	"Version": 2,
+	"VersionName": "1.1",
 	"FriendlyName": "Grade Sheet",
 	"Description": "Multi-camera grading contact sheet: grade every camera side by side, with masks by part, level and drawn shape. Adds a Grade Sheet menu and toolbar button. For Unreal Engine 5.4 and newer.",
 	"Category": "Editor",
