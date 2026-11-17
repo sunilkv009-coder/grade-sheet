@@ -442,24 +442,38 @@ function checkIds(su) {
   logMsg("part-ID picture " + su.id + ": " + gp + "% grey, " + kp + "% known stencil IDs -> " + (good ? "ok" : "NOT usable"), good ? "INFO" : "WARN");
   return good ? "ok" : "bad";
 }
-async function loadImages() {
-  const bust = "?t=" + Date.now();
+// a capture picture: tried a few times, because one failed request must not cost a camera its picture
+async function loadPic(name, bust) {
+  for (let n = 0; n < 3; n++) { const im = await loadImg("/img/" + name + bust + "&n=" + n); if (im) return im;
+    await new Promise(r => setTimeout(r, 350)); }
+  return null;
+}
+// pass: how often this has been tried again after a picture did not load
+async function loadImages(pass) {
+  const bust = "?t=" + Date.now(), failed = [];
   await Promise.all(S.setups.map(async su => {
     const cam = camOf(su); if (!cam) return;          // a camera that is not part of the open setup
-    const [img, idImg] = await Promise.all([loadImg("/img/" + su.id + ".png" + bust), loadImg("/img/" + su.id + "_id.png" + bust)]);
-    su.px = su.idpx = null;
-    if (img) {
-      su.w = img.naturalWidth; su.h = img.naturalHeight;
-      su.px = pixels(img).data; upload(cam, su.tex.img, img);
-      if (!su.patch) su.patch = [su.w >> 1, su.h >> 1];
-    }
-    if (idImg && img && idImg.naturalWidth === su.w) { su.idpx = pixels(idImg).data; upload(cam, su.tex.id, idImg); }
-    su.idState = !img ? null : !su.idpx ? "missing" : checkIds(su);
-    rasterize(su);
-    const ref = await loadImg("/img/ref_" + su.id + ".png" + bust); if (ref) setRef(su, ref);
+    try {
+      const [img, idImg] = await Promise.all([loadPic(su.id + ".png", bust), loadPic(su.id + "_id.png", bust)]);
+      if (img) {
+        su.w = img.naturalWidth; su.h = img.naturalHeight;
+        su.px = pixels(img).data; upload(cam, su.tex.img, img); su.idpx = null;
+        if (!su.patch) su.patch = [su.w >> 1, su.h >> 1];
+        if (idImg && idImg.naturalWidth === su.w) { su.idpx = pixels(idImg).data; upload(cam, su.tex.id, idImg); }
+        su.idState = !su.idpx ? "missing" : checkIds(su);
+      } else failed.push(su.id);                       // the picture already on screen (if any) stays, with its data
+      rasterize(su);
+      const ref = await loadImg("/img/ref_" + su.id + ".png" + bust); if (ref) setRef(su, ref);
+    } catch (e) { failed.push(su.id); logMsg("picture " + su.id + ": " + (e && e.stack || e), "ERROR"); }
   }));
   refresh();
   for (const c of S.cams) c.canvas.animate([{ opacity:.25 }, { opacity:1 }], { duration:260, easing:"ease-out" });   // new captures fade in
+  if (failed.length) {                                 // say why in the log, and try once or twice more a little later
+    for (const id of failed) fetch("/img/" + id + ".png" + bust).then(r => r.blob().then(b =>
+      logMsg("picture " + id + ".png did not load (pass " + (pass || 0) + "): HTTP " + r.status + ", " + b.size + " bytes", "WARN"))).catch(e => logMsg("picture " + id + ".png: " + e, "WARN"));
+    if ((pass || 0) < 2) setTimeout(() => loadImages((pass || 0) + 1).then(syncPanel).catch(() => {}), 2500);
+    else toast(failed.length + " picture(s) could not be loaded. Press Recapture all (details in the Log)");
+  }
 }
 function setRef(su, src) { su.refW = src.naturalWidth || src.width; su.refH = src.naturalHeight || src.height; upload(camOf(su), su.tex.ref, src); }
 const idAt = (su, x, y) => su.idpx ? su.idpx[(y * su.w + x) * 4] : 0;
@@ -1206,6 +1220,11 @@ function lostLink() {
   if (W && $("wiz").classList.contains("open")) $("wcap").textContent = "Lost the connection to Unreal. Close this window and open Grade Sheet again.";
 }
 async function poll() {
+  try { if (await pollOnce()) return; }               // true = the page is reloading
+  catch (e) { logMsg("page error in the update loop: " + (e && e.stack || e), "ERROR"); }
+  setTimeout(poll, 600);                               // whatever happened, keep following Unreal
+}
+async function pollOnce() {
   const st = await getJSON("/state");
   if (!st && Date.now() - S.lastOk > 6000) lostLink();
   if (st) { S.lastOk = Date.now();
@@ -1214,11 +1233,11 @@ async function poll() {
     if (st.status !== S.lastStatus) { S.lastStatus = st.status;
       if (/^NOT everything|Errors?:|Error:|Skipped/.test(st.status || "")) { $("banner").firstChild.textContent = st.status; $("banner").classList.add("on"); } }
     $("recap").disabled = !!st.busy; showBusy(st.busy || S.waitReload, st);
-    if (S.waitReload) { if (!st.busy && Date.now() - S.waitSince > 2500) return location.reload(); }
-    else if (!st.busy && (st.setups || []).map(s => s.id).join() !== S.setups.map(s => s.id).join()) return location.reload();   // setups changed elsewhere
+    if (S.waitReload) { if (!st.busy && Date.now() - S.waitSince > 2500) { location.reload(); return true; } }
+    else if (!st.busy && (st.setups || []).map(s => s.id).join() !== S.setups.map(s => s.id).join()) { location.reload(); return true; }   // setups changed elsewhere
     else if (S.captureId !== null && st.capture_id !== S.captureId) { S.captureId = st.capture_id; await loadImages(); syncPanel(); }
   }
-  setTimeout(poll, 600);
+  return false;
 }
 (async function start() {
   let st = null;

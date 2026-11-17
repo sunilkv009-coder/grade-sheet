@@ -99,6 +99,9 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
   background (it switches off *Use Less CPU when in Background* and the interface's sleep, and turns the viewport's
   Realtime on) and puts your settings back afterwards. If you close the window during a capture, Unreal finishes
   the capture on its own; if you open Grade Sheet again meanwhile, it carries on with the cameras that are left.
+- **Finished pictures.** Each camera gets 6 seconds to settle, and its picture is rendered 64 frames before it is
+  saved, so lighting, reflections and anti-aliasing are finished. If pictures still look soft or noisy in a heavy
+  scene, raise `SHOT_FRAMES` (and `SETTLE_SEC`) at the top of `Content/Python/grade_panel.py`.
 - The tiles are captured stills. After changing lighting, the model or a camera, press **Recapture all**.
 - Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
 - Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil

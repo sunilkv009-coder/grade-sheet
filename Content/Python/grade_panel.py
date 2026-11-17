@@ -19,7 +19,11 @@ import __main__
 
 PKG = "/Game/GradeSheet"                 # where the tool keeps its materials, grade instances and masks
 CAP_RES = (1280, 720)
-SETTLE_SEC, SHOT_SEC, ID_SEC = 4.0, 0.5, 1.0
+SETTLE_SEC, SHOT_SEC, ID_SEC = 6.0, 0.5, 1.0
+# A high-resolution screenshot is rendered on its own, at its own size, so what has settled in the viewport does not
+# carry over: Unreal renders the shot this many frames before saving it (its default is 4, which leaves lighting,
+# reflections and anti-aliasing half-finished: a soft, noisy picture). Raise it if pictures still look unfinished.
+SHOT_FRAMES = 64
 SHOT_TIMEOUT = 90.0                # a heavy scene can take a long time to render one high-resolution shot
 PARAM_NAMES = ["Blackpoint", "Whitepoint", "Lift", "Gain", "Multiply", "Offset", "Gamma",
                "Shadows", "Midtones", "Highlights", "Saturation"]
@@ -202,6 +206,7 @@ class Bridge(object):
         self.next_shot_check, self.throttle = 0.0, None
         self.slate_sleep, self.realtime = None, None       # editor settings changed for a capture (None = untouched)
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
+        self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -791,10 +796,26 @@ class Bridge(object):
             glog.info("drawing in the background: on (use less CPU was %s, interface sleep was %s, Realtime was %s)" % (
                 self.throttle, self.slate_sleep, self.realtime))
 
+    def shot_frames(self, on):
+        """on: the next screenshot is rendered SHOT_FRAMES frames so it comes out finished. off: the user's value back."""
+        sl = unreal.SystemLibrary
+        try:
+            if on and self.shot_delay is None:
+                try:
+                    self.shot_delay = int(sl.get_console_variable_int_value("r.HighResScreenshotDelay"))
+                except Exception:
+                    self.shot_delay = 4                          # the engine default
+                sl.execute_console_command(None, "r.HighResScreenshotDelay %d" % max(SHOT_FRAMES, self.shot_delay))
+            elif not on and self.shot_delay is not None:
+                sl.execute_console_command(None, "r.HighResScreenshotDelay %d" % self.shot_delay)
+                self.shot_delay = None
+        except Exception:
+            glog.error("could not change r.HighResScreenshotDelay")
+
     def end_capture(self):
         """Give Unreal back the way it was. Each step on its own, so one failure never leaves the rest undone."""
         self.cap_queue, self.shot_wait = [], None
-        for step in (self.rest_state, lambda: self.switch_variant(None), lambda: restore_levels(self.rest_vis),
+        for step in (lambda: self.shot_frames(False), self.rest_state, lambda: self.switch_variant(None), lambda: restore_levels(self.rest_vis),
                      les.eject_pilot_level_actor, lambda: self.keep_rendering(False)):
             try:
                 step()
@@ -827,10 +848,12 @@ class Bridge(object):
             if self.find_shot(path, before):
                 glog.info("  picture written after %.1f s: %s" % (self.t - (deadline - SHOT_TIMEOUT), os.path.basename(path)))
                 self.shot_wait = None
+                self.shot_frames(False)
             elif self.t > deadline:
                 warn("no screenshot file after %ds: %s (also looked in %s)" % (SHOT_TIMEOUT, path, ", ".join(SHOT_DIRS)))
                 self.missing.append(os.path.basename(path))
                 self.shot_wait = None
+                self.shot_frames(False)
             else:
                 waited = int(self.t - (deadline - SHOT_TIMEOUT))
                 if waited >= 3 and waited != self.shot_shown:
@@ -877,7 +900,8 @@ class Bridge(object):
                 os.remove(path)                                  # so an old picture is never taken for the new one
             label = "Capturing %s / %s%s" % (s["cam"], s["name"], " (part IDs)" if step[2] else "")
             before = self.shot_snapshot()
-            glog.info("  screenshot requested: %s" % os.path.basename(path))
+            self.shot_frames(not step[2])                        # the picture itself: many frames. Part IDs: as before
+            glog.info("  screenshot requested: %s%s" % (os.path.basename(path), "" if step[2] else " (%d frames)" % SHOT_FRAMES))
             unreal.AutomationLibrary.take_high_res_screenshot(CAP_RES[0], CAP_RES[1], path)
             self.shot_wait, self.shot_size, self.shot_shown = (path, before, self.t + SHOT_TIMEOUT, label), {}, -1
             self.next_shot_check = self.t + 0.5
