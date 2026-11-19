@@ -155,6 +155,14 @@ def safe(s):
     return re.sub(r"[^A-Za-z0-9_]", "_", str(s)).strip("_") or "x"
 
 
+def variant_code(name):
+    """Variant name -> the code in PPV names (studio syntax: codes joined with '-', e.g. 8WF-9WF)."""
+    return re.sub(r"[^A-Za-z0-9\-]", "", re.sub(r"[\s_]+", "-", str(name).strip())).strip("-") or "x"
+
+
+COLOR_GROUP = "PPV_CarPaint"       # colour volumes are attached to this actor (or put in this outliner folder)
+
+
 VOL_TAG = "GradeSheet:"            # actor tag "GradeSheet:<setup id>" ties a volume to its setup (labels can repeat)
 
 
@@ -211,6 +219,7 @@ class Bridge(object):
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
         self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
         self.last_levels = None                            # levels of the setup shown last (capture, or View in Unreal)
+        self.result = None                                 # answer to the last one-off job (e.g. colour PPVs), for the window
         self.hb = {"next": 0.0, "ticks": 0, "max_dt": 0.0, "last_wall": None, "step": ""}   # capture heartbeat
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
@@ -387,34 +396,91 @@ class Bridge(object):
             eas.destroy_actor(vol)                               # target level changed: rebuild it there
             vol = None
         if not vol:
-            level = sublevels().get(s["target"])
-            if not level:
-                raise RuntimeError("Level %s is not loaded" % s["target"])
-            if is_visible(level) is not True:
-                set_visible(level, True)
-            les.set_current_level_by_name(s["target"])
-            vol = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
-            self.restore_current()
-            if vol and lname(vol.get_outer()) != s["target"]:
-                # Unreal could not make the level current (it locks read-only levels): try moving the volume
-                glog.warn("volume for %s was created in %s instead of %s; moving it" % (sid, lname(vol.get_outer()), s["target"]))
-                try:
-                    moved = unreal.EditorLevelUtils.move_actors_to_level([vol], level, False, False)
-                    vol = moved[0] if moved else vol
-                except Exception:
-                    glog.error("moving the volume failed")
-            if not vol or lname(vol.get_outer()) != s["target"]:
-                if vol:
-                    eas.destroy_actor(vol)
-                raise RuntimeError("%s is locked (Unreal locks levels that are read-only / not checked out), so the grade "
-                                   "volume could not be placed in it. Check the level out in Perforce or unlock it with the "
-                                   "padlock in the Levels panel, then open Cameras and levels and press Done again" % s["target"])
+            try:
+                vol = self.spawn_volume(s["target"])
+            except RuntimeError as e:
+                raise RuntimeError("%s, then open Cameras and levels and press Done again" % e)
             vol.set_editor_property("unbound", True)
             self.ppvs[sid] = vol
         self.name_volume(s)
         if vol.get_editor_property("priority") != 10.0 + float(s.get("order", 0)):
             vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
         set_blendables(vol, mi, 1.0, 0.0)
+
+    def spawn_volume(self, target):
+        """A new post process volume in level `target` (made visible for it). RuntimeError when Unreal refuses."""
+        level = sublevels().get(target)
+        if not level:
+            raise RuntimeError("Level %s is not loaded" % target)
+        if is_visible(level) is not True:
+            set_visible(level, True)
+        les.set_current_level_by_name(target)
+        vol = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
+        self.restore_current()
+        if vol and lname(vol.get_outer()) != target:
+            # Unreal could not make the level current (it locks read-only levels): try moving the volume
+            glog.warn("volume was created in %s instead of %s; moving it" % (lname(vol.get_outer()), target))
+            try:
+                moved = unreal.EditorLevelUtils.move_actors_to_level([vol], level, False, False)
+                vol = moved[0] if moved else vol
+            except Exception:
+                glog.error("moving the volume failed")
+        if not vol or lname(vol.get_outer()) != target:
+            if vol:
+                eas.destroy_actor(vol)
+            raise RuntimeError("%s is locked (Unreal locks levels that are read-only / not checked out), so the volume "
+                               "could not be placed in it. Check the level out in Perforce or unlock it with the padlock "
+                               "in the Levels panel" % target)
+        return vol
+
+    def make_color_ppvs(self, levels, codes):
+        """Feature: Create PPVs for colours. In every chosen level, one PPV_Variant_<code> per chosen colour:
+        unbound, enabled, attached to the level's PPV_CarPaint actor (or in the PPV_CarPaint outliner folder).
+        A volume that is already there (same label in that level) is left alone. Tagging the volumes to their
+        variants is done afterwards with the studio's Tool Suite (Tag PPV Nuke actors)."""
+        made, skipped, failed = [], [], []
+        vis = {n: is_visible(l) for n, l in sublevels().items()}
+        actors = eas.get_all_level_actors()
+        for lv in levels:
+            have = {a.get_actor_label().lower(): a for a in actors
+                    if isinstance(a, unreal.PostProcessVolume) and lname(a.get_outer()) == lv}
+            group = next((a for a in actors if a.get_actor_label() == COLOR_GROUP and lname(a.get_outer()) == lv
+                          and not isinstance(a, unreal.PostProcessVolume)), None)
+            locked = None
+            for code in codes:
+                label = "PPV_Variant_" + variant_code(code)
+                if locked:                                       # one refusal is enough to know the level is locked
+                    failed.append("%s in %s: level locked (see above)" % (label, lv))
+                    continue
+                if label.lower() in have:
+                    skipped.append("%s in %s" % (label, lv))
+                    continue
+                try:
+                    vol = self.spawn_volume(lv)
+                    vol.set_actor_label(label)
+                    vol.set_editor_property("unbound", True)
+                    vol.set_editor_property("enabled", True)
+                    vol.set_editor_property("blend_weight", 1.0)
+                    placed = "folder " + COLOR_GROUP
+                    if group is not None:
+                        try:
+                            vol.attach_to_actor(group, "", unreal.AttachmentRule.KEEP_WORLD,
+                                                unreal.AttachmentRule.KEEP_WORLD, unreal.AttachmentRule.KEEP_WORLD, False)
+                            placed = "under " + COLOR_GROUP
+                        except Exception:
+                            group = None
+                    if group is None:
+                        vol.set_folder_path(COLOR_GROUP)
+                    have[label.lower()] = vol
+                    made.append("%s in %s" % (label, lv))
+                    glog.info("  made %s in %s (%s)" % (label, lv, placed))
+                except Exception as e:
+                    failed.append("%s in %s: %s" % (label, lv, e))
+                    locked = "locked" in str(e)
+                    glog.error("  could not make %s in %s" % (label, lv))
+        restore_levels(vis)
+        glog.info("colour PPVs: %d made, %d already there, %d failed" % (len(made), len(skipped), len(failed)))
+        return {"made": made, "skipped": skipped, "failed": failed}
 
     def leave_levels(self):
         """When the tool is done looking through cameras, the levels of the setup it showed last stay visible and
@@ -524,7 +590,7 @@ class Bridge(object):
             setups.append(d)
         state = {"capture_id": self.capture_id, "status": self.status, "busy": bool(self.cap_queue or self.shot_wait),
                  "preview_id": self.preview_id, "progress": self.progress, "preview_key": self.preview_key, "variant_sets": self.variant_tables(),
-                 "parts": self.parts, "levels": level_info(), "max_cams": MAX_CAMS,
+                 "parts": self.parts, "levels": level_info(), "max_cams": MAX_CAMS, "result": self.result,
                  "all_cameras": [{"name": n, "level": lname(a.get_outer())} for n, a in sorted(self.cams.items())],
                  "cameras": self.cfg["cameras"], "setups": setups}
         tmp = os.path.join(CAP_DIR, "state.json.tmp")
@@ -644,6 +710,11 @@ class Bridge(object):
             self.rest_state()
             self.switch_variant(None)
             self.leave_levels()
+        elif op == "color_ppvs":                                 # feature: create PPVs for colours
+            glog.info("create colour PPVs: colours %s in levels %s" % (", ".join(c.get("colors", [])), ", ".join(c.get("levels", []))))
+            res = self.make_color_ppvs(c.get("levels", []), c.get("colors", []))
+            self.result = dict(res, id=c.get("req"), kind="color_ppvs")
+            self.write_state("Colour PPVs: %d made, %d already there, %d failed" % (len(res["made"]), len(res["skipped"]), len(res["failed"])))
         elif op == "cancel":                                     # Stop button while capturing
             if self.cap_queue or self.shot_wait:
                 self.end_capture()

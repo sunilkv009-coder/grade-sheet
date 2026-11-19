@@ -163,6 +163,17 @@
   .inl { display:flex; gap:6px; } .inl input { flex:1; }
   .wmenu { display:none; margin-top:4px; background:var(--panel2); border:1px solid #3a4152; border-radius:10px; padding:6px; }
   .wmenu.open { display:block; }
+  /* colour tools */
+  .tools { margin-top:18px; padding-top:12px; border-top:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  .tools span { color:var(--mute); font-size:12px; flex:1; }
+  .picks { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:2px 12px; margin-top:6px; }
+  .picks label { display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .picks label:hover { background:var(--panel2); } .picks label em { color:var(--mute); font-style:normal; font-size:11px; margin-left:auto; }
+  .picks label.ro { color:var(--mute); }
+  .bar { display:flex; gap:6px; align-items:center; margin-top:8px; } .bar input[type=text] { flex:1; }
+  .vt { margin-top:12px; } .vt h3 { margin:0; font-size:13px; display:flex; gap:8px; align-items:center; } .vt h3 span { color:var(--mute); font-weight:400; font-size:12px; }
+  .res { margin-top:10px; } .res b { display:block; margin-top:10px; } .res div { font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--mute); }
+  .res .bad { color:#ff8a7a; }
 </style>
 </head>
 <body>
@@ -1075,6 +1086,76 @@ function allCameras() {                       // same combination for every came
     W.entries[cam] = { levels:[...new Set(f.levels.map(l => l === own ? o : l))], target:o, override:!!protectedWhy(o) }; }
   finishWizard();
 }
+// ---------------------------------------------------------------- colour tools: create PPVs for colours
+// W.mode: "cplv" (levels) -> "cpcol" (colours) -> "cpwait" (Unreal is working) -> "cpdone" (what was made)
+// Unreal makes PPV_Variant_<code> in every chosen level: unbound and enabled. Tagging them to their variants is done
+// afterwards with the studio's Tool Suite, which switches the right one on for the paint chosen in Variant Manager.
+const variantCode = n => String(n).trim().replace(/[\s_]+/g, "-").replace(/[^A-Za-z0-9-]/g, "").replace(/^-+|-+$/g, "") || "x";
+const isColorTable = t => /colou?r/i.test(t.name);
+function startColorPpvs() { W = { mode:"cplv", lv:new Set(), filter:"", cols:new Set(), allTables:false, msg:"" }; renderWizard(); }
+function pickGrid(items, isOn, onToggle) {     // items: [{ key, text, note, ro }]
+  const g = el("div", "picks");
+  for (const it of items) { const row = el("label", it.ro ? "ro" : ""), cb = el("input"); cb.type = "checkbox"; cb.checked = isOn(it.key);
+    cb.onchange = () => onToggle(it.key, cb.checked); row.title = it.text + (it.note ? "  (" + it.note + ")" : "");
+    row.append(cb, document.createTextNode(it.text)); if (it.note) row.appendChild(el("em", "", it.note)); g.appendChild(row); }
+  return g;
+}
+function renderColorPpvs(body) {
+  $("wback").style.display = W.mode === "cpwait" ? "none" : "";
+  $("wcancel").style.display = W.mode === "cpdone" ? "none" : "";
+  if (W.mode === "cplv") {
+    $("wtitle").textContent = "Create PPVs for colours: levels"; $("wnext").textContent = "Next";
+    $("wsub").textContent = "Tick every level that should get a set of colour PPVs (for example each camera level).";
+    const bar = el("div", "bar"), f = el("input"), all = el("button", "", "Tick all shown"), none = el("button", "", "Clear");
+    f.type = "text"; f.placeholder = "Filter, for example JE_CJ"; f.value = W.filter;
+    const shown = () => S.levels.filter(l => l.name.toLowerCase().includes(W.filter.trim().toLowerCase()));
+    f.oninput = () => { W.filter = f.value; const pos = f.selectionStart; renderWizard(); const n = $("wbody").querySelector("input[type=text]"); n.focus(); n.setSelectionRange(pos, pos); };
+    all.onclick = () => { shown().forEach(l => W.lv.add(l.name)); renderWizard(); };
+    none.onclick = () => { W.lv.clear(); renderWizard(); };
+    bar.append(f, all, none); body.appendChild(bar);
+    body.appendChild(el("div", "hint", W.lv.size + " level(s) ticked" + (W.lv.size ? ": " + [...W.lv].join(", ") : "")));
+    body.appendChild(pickGrid(shown().map(l => ({ key:l.name, text:l.name, ro:l.readonly || l.base, note:l.readonly ? "read-only" : l.base ? "base" : "" })),
+      k => W.lv.has(k), (k, on) => { on ? W.lv.add(k) : W.lv.delete(k); renderWizard(); }));
+  } else if (W.mode === "cpcol") {
+    const colorTabs = S.variantSets.filter(isColorTable), tabs = W.allTables || !colorTabs.length ? S.variantSets : colorTabs;
+    $("wtitle").textContent = "Create PPVs for colours: colours"; $("wnext").textContent = "Create " + W.cols.size + " x " + W.lv.size + " PPVs";
+    $("wsub").textContent = colorTabs.length ? "Colours from Variant Manager (tables with COLOR in the name). Tick the ones to make PPVs for."
+                                             : "No Variant Manager table has COLOR in its name, so every table is shown. Tick the variants to make PPVs for.";
+    if (!S.variantSets.length) body.appendChild(el("div", "hint", "No Variant Manager tables found in this level."));
+    if (colorTabs.length && colorTabs.length < S.variantSets.length) {
+      const b = el("label", "ck"), cb = el("input"); cb.type = "checkbox"; cb.checked = W.allTables;
+      cb.onchange = () => { W.allTables = cb.checked; renderWizard(); }; b.append(cb, document.createTextNode(" Show every Variant Manager table")); body.appendChild(b); }
+    for (const t of tabs) { const box = el("div", "vt"), h = el("h3", "", t.name), all = el("button", "", "All"), none = el("button", "", "None");
+      h.appendChild(el("span", "", t.variants.length + " variants"));
+      all.onclick = () => { t.variants.forEach(v => W.cols.add(v)); renderWizard(); }; none.onclick = () => { t.variants.forEach(v => W.cols.delete(v)); renderWizard(); };
+      h.append(all, none); box.appendChild(h);
+      box.appendChild(pickGrid(t.variants.map(v => ({ key:v, text:v, note:"PPV_Variant_" + variantCode(v) })), k => W.cols.has(k),
+        (k, on) => { on ? W.cols.add(k) : W.cols.delete(k); renderWizard(); }));
+      body.appendChild(box); }
+  } else if (W.mode === "cpwait") {
+    $("wtitle").textContent = "Creating colour PPVs"; $("wsub").textContent = "Unreal is placing the volumes. This can take a moment with many levels.";
+    $("wnext").textContent = "Working..."; body.appendChild(el("div", "hint", W.cols.size + " colour(s) in " + W.lv.size + " level(s)"));
+  } else {
+    const r = W.res || {};
+    $("wtitle").textContent = "Colour PPVs"; $("wnext").textContent = "Done"; $("wback").style.display = "none";
+    $("wsub").textContent = (r.made || []).length + " made, " + (r.skipped || []).length + " already there, " + (r.failed || []).length + " failed.";
+    const res = el("div", "res");
+    const list = (title, items, cls) => { if (!items || !items.length) return; res.appendChild(el("b", "", title)); items.forEach(x => res.appendChild(el("div", cls || "", x))); };
+    list("Could not be made", r.failed, "bad"); list("Made", r.made); list("Already there (left as they were)", r.skipped);
+    body.appendChild(res);
+    if ((r.made || []).length) body.appendChild(el("div", "hint", "Next: in Tool Suite > Actor and Component Tags > PPV and CCR, press Tag PPV Nuke actors, so each volume switches on with its paint. Then save the levels."));
+  }
+}
+function colorPpvsNext() {
+  if (W.mode === "cplv") { if (!W.lv.size) { W.msg = "Tick at least one level."; return renderWizard(); } W.mode = "cpcol"; W.msg = ""; return renderWizard(); }
+  if (W.mode === "cpcol") { if (!W.cols.size) { W.msg = "Tick at least one colour."; return renderWizard(); }
+    W.req = Date.now(); W.mode = "cpwait"; W.msg = "";
+    const levels = S.levels.map(l => l.name).filter(l => W.lv.has(l)), colors = [...W.cols];
+    logMsg("create colour PPVs: " + colors.join(", ") + " in " + levels.join(", "));
+    post({ op:"color_ppvs", req:W.req, levels, colors }); return renderWizard(); }
+  if (W.mode === "cpdone") return openList();
+}
+function colorPpvsBack() { if (W.mode === "cpcol") { W.mode = "cplv"; W.msg = ""; return renderWizard(); } openList(); }
 function renderWizard() {
   const body = $("wbody"); body.innerHTML = "";
   const show = (id, on) => { $(id).style.display = on ? "" : "none"; };
@@ -1093,6 +1174,11 @@ function renderWizard() {
           return setTimeout(() => { x.dataset.armed = ""; x.textContent = "×"; }, 3000); }
         sendConfig(S.setups.filter(s => s.name !== name).map(plain), S.open === name ? null : S.open); };
       row.append(open, edit, x); body.appendChild(row); }
+    const tools = el("div", "tools"), mk = el("button", "", "Create PPVs for colours");
+    tools.append(el("span", "", "Colour tools: one PPV_Variant_<code> per car paint, in the levels you choose."), mk);
+    mk.onclick = startColorPpvs; body.appendChild(tools);
+  } else if (W.mode.startsWith("cp")) {
+    renderColorPpvs(body);
   } else if (W.mode === "name") {
     $("wtitle").textContent = "New grade setup"; $("wsub").textContent = "What is this grade for? It appears under this name in the list.";
     $("wnext").textContent = "Next";
@@ -1188,13 +1274,14 @@ $("diagbtn").onclick = () => { logMsg("Diagnostics pressed; status shown: " + ($
   fetch("/diag", { method:"POST" }).then(r => r.text()).then(t => toast("Saved " + t + " (its folder is opened)")).catch(() => toast("Could not save diagnostics")); };
 $("logbtn").onclick = () => fetch("/openlog", { method:"POST" }).then(r => r.text()).then(t => toast(t === "ok" ? "Log opened in your text editor" : "No log yet")).catch(() => toast("Could not open the log"));
 $("busystop").onclick = () => { post({ op:"cancel" }); $("busysub").textContent = "Stopping..."; };
-$("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
-$("wback").onclick = () => { W.msg = "";
+$("wcancel").onclick = () => { if (W.mode.startsWith("cp")) return openList(); if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };
+$("wback").onclick = () => { if (W.mode.startsWith("cp")) return colorPpvsBack(); W.msg = "";
   if (W.mode === "cam") { if (W.step > 0) W.step--; else W.mode = "cams"; }
   else if (W.mode === "cams") { if (W.editing) return openList(); W.mode = "name"; }
   else return openList();
   renderWizard(); };
 $("wnext").onclick = () => {
+  if (W.mode.startsWith("cp")) return colorPpvsNext();
   if (W.mode === "list") return startNew();
   if (W.mode === "name") { const name = W.name.trim();
     if (!name) { W.msg = "Give the setup a name."; return renderWizard(); }
@@ -1231,6 +1318,8 @@ async function pollOnce() {
   const st = await getJSON("/state");
   if (!st && Date.now() - S.lastOk > 6000) lostLink();
   if (st) { S.lastOk = Date.now();
+    if (W && W.mode === "cpwait" && st.result && st.result.id === W.req) { W.res = st.result; W.mode = "cpdone"; S.levels = st.levels || S.levels; renderWizard(); }
+    if (st.variant_sets) S.variantSets = st.variant_sets;
     if (Date.now() > S.toastUntil) $("status").textContent = st.status || (S.cams.length + " cameras");
     // problems (save failed, setup errors) stay on screen until dismissed
     if (st.status !== S.lastStatus) { S.lastStatus = st.status;
