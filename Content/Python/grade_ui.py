@@ -12,6 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(CMD_DIR, exist_ok=True)
 sys.path.insert(0, HERE)
 import grade_log as glog
+import grade_diag as gdiag
 glog.setup(CAP_DIR, "window")
 PORT = 8765
 started = time.time()
@@ -67,6 +68,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/openlog":                     # the window's Log button
                 ok = glog.open_in_editor()
                 return self.send_bytes(b"ok" if ok else b"no log yet", "text/plain")
+            if self.path == "/diag":                        # the window's Diagnostics button: one zip to send
+                glog.info("diagnostics requested from the window")
+                out = gdiag.bundle(CAP_DIR)
+                glog.info("diagnostics saved: " + out)
+                gdiag.show_file(out)
+                return self.send_bytes(os.path.basename(out).encode("utf-8"), "text/plain")
             if self.path == "/shapes":                      # the drawn shapes, kept so they can be edited later
                 with open(os.path.join(CAP_DIR, "shapes.json"), "wb") as f:
                     f.write(body)
@@ -104,6 +111,42 @@ class Server(ThreadingHTTPServer):
     request_queue_size = 64             # the page asks for every picture at once; the default of 5 can refuse some
 
 
+def observer():
+    """Watches Unreal from outside during a capture. This process keeps running when Unreal stops ticking, so the
+    log shows whether Unreal went quiet, what window was in front and what the GPU was doing at that moment."""
+    path, last_status, quiet_logged, next_line = os.path.join(CAP_DIR, "state.json"), None, False, 0.0
+    while True:
+        time.sleep(2)
+        try:
+            with open(path) as f:
+                st = json.load(f)
+            age = time.time() - os.path.getmtime(path)
+            alive = os.path.join(CAP_DIR, "alive.txt")         # Unreal touches it every 5 s while capturing
+            if os.path.exists(alive):
+                age = min(age, time.time() - os.path.getmtime(alive))
+        except Exception:
+            continue
+        if not st.get("busy"):
+            if last_status is not None:
+                glog.info("observer: capture over (%s)" % st.get("status", ""))
+            last_status, quiet_logged = None, False
+            continue
+        now = time.time()
+        if last_status is None:                         # a capture just started: what else is using the GPU
+            glog.info("observer: capture started | " + gdiag.gpu_summary())
+        if st.get("status") != last_status:
+            last_status, quiet_logged = st.get("status"), False
+        if now >= next_line:
+            next_line = now + 10
+            glog.info("observer: '%s' | %s | Unreal last wrote %.0f s ago | in front: %s" % (
+                st.get("status", ""), "%d/%d done" % tuple(st.get("progress", [0, 0])), age, gdiag.foreground_text()))
+        if age > 20 and not quiet_logged:
+            quiet_logged = True
+            glog.warn("observer: Unreal has given no sign of life for %.0f s during a capture (it has probably stopped running)\n"
+                      "%s\nwindow in front: %s\nUnreal's own log, last lines:\n%s" % (
+                          age, gdiag.gpu_summary(), gdiag.foreground_text(), gdiag.unreal_log_tail(CAP_DIR, 40)))
+
+
 def watchdog():
     """Quit when the window has been closed (no ping for a while)."""
     while True:
@@ -139,6 +182,7 @@ if __name__ == "__main__":
         with open(os.path.join(CAP_DIR, "ui_port.txt"), "w") as f:
             f.write(str(port))
         threading.Thread(target=watchdog, daemon=True).start()
+        threading.Thread(target=observer, daemon=True).start()
         if "--no-window" not in sys.argv:
             open_window("http://127.0.0.1:%d/" % port)
         server.serve_forever()

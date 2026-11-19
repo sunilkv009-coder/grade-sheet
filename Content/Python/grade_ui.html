@@ -169,6 +169,7 @@
 <header>
   <span class="dot"></span><h1>Grade Sheet<span id="openname"></span></h1><span id="status">Loading</span><span class="grow"></span>
   <button id="logbtn" title="Open the Grade Sheet log (what the tool did, and any errors)">Log</button>
+  <button id="diagbtn" title="Save one zip with the Grade Sheet log, Unreal's log and what the GPU was doing, to send when something goes wrong">Diagnostics</button>
   <button id="setupbtn" title="Open another grade setup, or create a new one">Setups</button>
   <button id="undo" title="Undo (Ctrl+Z)">Undo</button><button id="redo" title="Redo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
   <button id="ab" title="Drag the divider on any image: left is before, right is after">Compare before / after</button>
@@ -1183,6 +1184,8 @@ setInterval(async () => {
 }, 500);
 $("setupbtn").onclick = openList;
 $("banner").lastChild.onclick = () => $("banner").classList.remove("on");
+$("diagbtn").onclick = () => { logMsg("Diagnostics pressed; status shown: " + ($("status") ? $("status").textContent : "?")); toast("Saving diagnostics...");
+  fetch("/diag", { method:"POST" }).then(r => r.text()).then(t => toast("Saved " + t + " (its folder is opened)")).catch(() => toast("Could not save diagnostics")); };
 $("logbtn").onclick = () => fetch("/openlog", { method:"POST" }).then(r => r.text()).then(t => toast(t === "ok" ? "Log opened in your text editor" : "No log yet")).catch(() => toast("Could not open the log"));
 $("busystop").onclick = () => { post({ op:"cancel" }); $("busysub").textContent = "Stopping..."; };
 $("wcancel").onclick = () => { if (W.mode === "list" || !S.setups.length) { if (S.open) closeWizard(); else openList(); } else { post({ op:"eject" }); openList(); } };

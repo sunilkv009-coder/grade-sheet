@@ -103,6 +103,10 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 - **Finished pictures.** Each camera gets 6 seconds to settle, and its picture is rendered 64 frames before it is
   saved, so lighting, reflections and anti-aliasing are finished. If pictures still look soft or noisy in a heavy
   scene, raise `SHOT_FRAMES` (and `SETTLE_SEC`) at the top of `Content/Python/grade_panel.py`.
+- **When a capture gets stuck**, press **Diagnostics** in the window. It saves one zip (Grade Sheet's log, the end
+  of Unreal's own log, what the GPU and other programs were doing, which window was in front) and opens its
+  folder, ready to send. During a capture the log also gets a line every 5 s from Unreal and every 10 s from the
+  window, so a stall shows exactly where it happened.
 - The tiles are captured stills. After changing lighting, the model or a camera, press **Recapture all**.
 - Grades run after tonemapping, so what you see in the sheet is what the viewport shows.
 - Part masks use custom stencil. For a packaged build set **Project Settings > Rendering > Custom Depth-Stencil

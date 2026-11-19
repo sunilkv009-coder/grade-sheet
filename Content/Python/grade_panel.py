@@ -40,6 +40,9 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import grade_log as glog
 glog.setup(CAP_DIR, "unreal", rotate=True)
+import grade_diag as gdiag
+HEARTBEAT_SEC = 5.0                # while capturing: one line every 5 s on what Unreal is doing
+SLOW_FRAME_SEC = 1.5               # a frame longer than this is written to the log
 
 
 def info(msg):
@@ -208,6 +211,7 @@ class Bridge(object):
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
         self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
         self.last_levels = None                            # levels of the setup shown last (capture, or View in Unreal)
+        self.hb = {"next": 0.0, "ticks": 0, "max_dt": 0.0, "last_wall": None, "step": ""}   # capture heartbeat
         self.rest_variants, self.changed = {}, set()
         self.rest_vis = {n: is_visible(l) for n, l in sublevels().items()}
         try:
@@ -724,9 +728,11 @@ class Bridge(object):
                   ("id", sid, True), ("wait", ID_SEC), ("shot", sid, "_id"), ("wait", SHOT_SEC), ("id", sid, False)]
         self.cap_queue, self.cap_until = q + [("done",)], 0.0
         self.shot_wait, self.missing = None, []
+        glog.info("editor before the capture: " + self.editor_text())
         self.keep_rendering(True)
         self.cap_started = time.time()
         glog.info("capture started: " + ", ".join(self.cap_ids))
+        self.hb.update(next=0.0, ticks=0, max_dt=0.0, last_wall=None, step="")
         self.write_state("Capturing")
 
     def shot_snapshot(self):
@@ -804,6 +810,7 @@ class Bridge(object):
         except Exception:
             glog.error("could not change the viewport's Realtime setting")
         if on:
+            glog.info("  editor during the capture: " + self.editor_text())
             glog.info("drawing in the background: on (use less CPU was %s, interface sleep was %s, Realtime was %s)" % (
                 self.throttle, self.slate_sleep, self.realtime))
 
@@ -862,6 +869,7 @@ class Bridge(object):
                 self.shot_frames(False)
             elif self.t > deadline:
                 warn("no screenshot file after %ds: %s (also looked in %s)" % (SHOT_TIMEOUT, path, ", ".join(SHOT_DIRS)))
+                glog.warn("  Unreal's own log, last lines:\n" + gdiag.unreal_log_tail(CAP_DIR, 80))
                 self.missing.append(os.path.basename(path))
                 self.shot_wait = None
                 self.shot_frames(False)
@@ -873,11 +881,14 @@ class Bridge(object):
                         label, waited, ". If this keeps counting, click once on the Unreal window" if waited >= 15 else ""))
                     if waited in (15, 45):
                         warn("still waiting for %s after %d s" % (os.path.basename(path), waited))
+                        glog.warn("  " + self.editor_text())
+                        glog.warn("  Unreal's own log, last matching lines:\n" + gdiag.unreal_log_tail(CAP_DIR, 40, gdiag.STALL_WORDS))
                 return
         if not self.cap_queue or self.t < self.cap_until:
             return
         step = self.cap_queue.pop(0)
         kind = step[0]
+        self.hb["step"] = "%s %s%s" % (kind, step[1] if len(step) > 1 else "", " (part IDs)" if len(step) > 2 and step[2] else "")
         if kind == "wait":
             self.cap_until = self.t + step[1]
             return
@@ -885,6 +896,7 @@ class Bridge(object):
             self.end_capture()
             glog.info("capture finished in %.0f s, missing pictures: %s" % (
                 time.time() - self.cap_started, ", ".join(self.missing) or "none"))
+            glog.info("  editor after the capture: " + self.editor_text())
             self.capture_id += 1
             if self.missing:
                 return self.write_state("Capture finished, but Unreal wrote no picture for %d shots (%s). "
@@ -919,6 +931,64 @@ class Bridge(object):
             self.next_shot_check = self.t + 0.5
             self.write_state(label)
 
+    def cvar(self, name):
+        sl = unreal.SystemLibrary
+        for get in ("get_console_variable_int_value", "get_console_variable_float_value", "get_console_variable_bool_value"):
+            try:
+                return getattr(sl, get)(name)
+            except Exception:
+                continue
+        return "?"
+
+    def editor_text(self):
+        """The editor settings that decide whether Unreal keeps drawing, as one line."""
+        rt = "?"
+        try:
+            get = getattr(les, "editor_get_viewport_realtime", None)
+            rt = get() if get else "n/a"
+        except Exception:
+            pass
+        try:
+            thr = unreal.get_default_object(unreal.EditorPerformanceSettings).get_editor_property("throttle_cpu_when_not_foreground")
+        except Exception:
+            thr = "?"
+        return "viewport Realtime %s | use-less-CPU-in-background %s | Slate.AllowSlateToSleep %s | r.HighResScreenshotDelay %s | t.MaxFPS %s | r.ScreenPercentage %s" % (
+            rt, thr, self.cvar("Slate.AllowSlateToSleep"), self.cvar("r.HighResScreenshotDelay"), self.cvar("t.MaxFPS"),
+            self.cvar("r.ScreenPercentage"))
+
+    def heartbeat(self, dt):
+        """While capturing: count frames, note slow ones, and every HEARTBEAT_SEC write where the capture is.
+        A gap between heartbeats in the log means Unreal itself stopped running (its frames stopped)."""
+        if not (self.cap_queue or self.shot_wait):
+            self.hb.update(ticks=0, max_dt=0.0, last_wall=None)
+            return
+        now = time.time()
+        hb = self.hb
+        if hb["last_wall"] is not None and now - hb["last_wall"] > SLOW_FRAME_SEC:
+            glog.warn("  Unreal did not run for %.1f s (one frame; step: %s, window in front: %s)" % (
+                now - hb["last_wall"], hb["step"], gdiag.foreground_text(os.getpid())))
+        hb["last_wall"] = now
+        hb["ticks"] += 1
+        hb["max_dt"] = max(hb["max_dt"], dt)
+        if now < hb["next"]:
+            return
+        if hb["next"]:
+            wait = ""
+            if self.shot_wait:
+                path, before, deadline, label = self.shot_wait
+                wait = " | waiting %.0f s for %s" % (self.t - (deadline - SHOT_TIMEOUT), os.path.basename(path))
+            elif self.t < self.cap_until:
+                wait = " | settling, %.1f s left" % (self.cap_until - self.t)
+            glog.info("  heartbeat: %d/%d done, step %s%s | %d frames in %.0f s (slowest %.2f s) | in front: %s" % (
+                self.progress[0], self.progress[1], hb["step"] or "-", wait, hb["ticks"], HEARTBEAT_SEC,
+                hb["max_dt"], gdiag.foreground_text(os.getpid())))
+        hb.update(next=now + HEARTBEAT_SEC, ticks=0, max_dt=0.0)
+        try:                                                     # for the window's observer: Unreal is still running
+            with open(os.path.join(CAP_DIR, "alive.txt"), "w") as f:
+                f.write("%.1f %s" % (now, hb["step"]))
+        except OSError:
+            pass
+
     def preview_step(self):
         if self.preview_mark is not None and self.t >= self.preview_mark[0]:
             self.preview_key = self.preview_mark[1]              # which request this picture answers
@@ -941,6 +1011,7 @@ class Bridge(object):
                 self.gone_logged = True
                 glog.info("the window was closed during a capture; Unreal finishes the capture on its own")
             self.t += dt
+            self.heartbeat(dt)
             self.capture_step()
             self.preview_step()
             if self.t >= self.next_poll:
