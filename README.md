@@ -103,6 +103,11 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 - **Finished pictures.** Each camera gets 6 seconds to settle, and its picture is rendered 64 frames before it is
   saved, so lighting, reflections and anti-aliasing are finished. If pictures still look soft or noisy in a heavy
   scene, raise `SHOT_FRAMES` (and `SETTLE_SEC`) at the top of `Content/Python/grade_panel.py`.
+- **Create PPVs for colours** (Setups > Create PPVs for colours): tick the levels, then the colours from Variant
+  Manager (tables with COLOR in the name; otherwise every table). Unreal makes one `PPV_Variant_<code>` per colour in
+  each level: unbound, enabled, attached to the level's `PPV_CarPaint` actor (or put in a `PPV_CarPaint` folder).
+  Volumes that are already there are left alone; locked (read-only) levels are reported. Afterwards tag the volumes
+  with Tool Suite > PPV and CCR > Tag PPV Nuke actors, and save the levels.
 - **When a capture gets stuck**, press **Diagnostics** in the window. It saves one zip (Grade Sheet's log, the end
   of Unreal's own log, what the GPU and other programs were doing, which window was in front) and opens its
   folder, ready to send. During a capture the log also gets a line every 5 s from Unreal and every 10 s from the
