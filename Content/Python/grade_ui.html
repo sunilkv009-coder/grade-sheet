@@ -1192,7 +1192,7 @@ function allCameras() {                       // same combination for every came
 }
 // ---------------------------------------------------------------- colour tools: create PPVs for colours
 // W.mode: "cplv" (levels) -> "cpcol" (colours) -> "cpwait" (Unreal is working) -> "cpdone" (what was made)
-// Unreal makes PPV_Variant_<code> in every chosen level: unbound and enabled. Tagging them to their variants is done
+// Unreal makes PPV_Nuke_<code_code> in every chosen level: unbound and enabled. Tagging them to their variants is done
 // afterwards with the studio's Tool Suite, which switches the right one on for the paint chosen in Variant Manager.
 const variantCode = n => String(n).trim().replace(/[\s_]+/g, "-").replace(/[^A-Za-z0-9-]/g, "").replace(/^-+|-+$/g, "") || "x";
 const isColorTable = t => /colou?r/i.test(t.name);
@@ -1233,7 +1233,7 @@ function renderColorPpvs(body) {
       h.appendChild(el("span", "", t.variants.length + " variants"));
       all.onclick = () => { t.variants.forEach(v => W.cols.add(v)); renderWizard(); }; none.onclick = () => { t.variants.forEach(v => W.cols.delete(v)); renderWizard(); };
       h.append(all, none); box.appendChild(h);
-      box.appendChild(pickGrid(t.variants.map(v => ({ key:v, text:v, note:"PPV_Variant_" + variantCode(v) })), k => W.cols.has(k),
+      box.appendChild(pickGrid(t.variants.map(v => ({ key:v, text:v, note:"PPV_Nuke_" + variantCode(v).replace(/-/g, "_") })), k => W.cols.has(k),
         (k, on) => { on ? W.cols.add(k) : W.cols.delete(k); renderWizard(); }));
       body.appendChild(box); }
   } else if (W.mode === "cpwait") {
@@ -1279,7 +1279,7 @@ function renderWizard() {
         sendConfig(S.setups.filter(s => s.name !== name).map(plain), S.open === name ? null : S.open); };
       row.append(open, edit, x); body.appendChild(row); }
     const tools = el("div", "tools"), mk = el("button", "", "Create PPVs for colours");
-    tools.append(el("span", "", "Colour tools: one PPV_Variant_<code> per car paint, in the levels you choose."), mk);
+    tools.append(el("span", "", "Colour tools: one PPV_Nuke_<code> per car paint, in the levels you choose."), mk);
     mk.onclick = startColorPpvs; body.appendChild(tools);
   } else if (W.mode.startsWith("cp")) {
     renderColorPpvs(body);

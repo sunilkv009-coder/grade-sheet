@@ -7,8 +7,10 @@ and applies what that window asks for, through JSON files in Saved/GradeCaptures
 GRADE SETUP = one named grade for one camera:
     camera + the levels that are active for it + the ONE level the grade lives in.
 In Unreal a setup is:
-    PPV_<Name>, PPV_Variant_<code-code> or PPV_<Name>_Variant_<code-code>
-                     unbound post process volume, placed in the setup's target level (see ppv_label)
+    PPV_Nuke_<Name>, PPV_Nuke_<code_code> or PPV_Nuke_<Name>_<code_code>
+                     unbound post process volume, placed in the setup's target level (see ppv_label). The studio's
+                     Tool Suite (Tag PPV Nuke actors) later renames them PPV_<Name> / PPV_Variant_<code-code>; a
+                     volume that already exists under either name is used instead of making a new one.
     MI_Grade_<id>    instance of M_NukeGrade (whole frame + layers A, B, C)
     T_Mask_<id>      drawn-shape mask (R/G/B = layers A/B/C)
 so the grade switches on and off with its level. Setups are listed in <project>/Config/GradeSheetSetups.json.
@@ -228,25 +230,72 @@ COLOR_GROUP = "PPV_CarPaint"       # colour volumes are attached to this actor (
 VOL_TAG = "GradeSheet:"            # actor tag "GradeSheet:<setup id>" ties a volume to its setup (labels can repeat)
 
 
-def ppv_label(s):
-    """Studio naming rule for post process volumes:
-         always-on grade            PPV_<Name>                        PPV_Badge
-         variant grade              PPV_Variant_<code-code>           PPV_Variant_8WF-9WF
-         named grade for a variant  PPV_<Name>_Variant_<code-code>    PPV_Badge_Variant_8WF-9WF"""
+def _label_parts(s):
     name = safe(s.get("name", "Grade"))
-    codes = [safe(v) for v in (s.get("variants") or {}).values()]
+    codes = [variant_code(v) for v in (s.get("variants") or {}).values()]
     if not codes and s.get("variant"):
-        codes = [name]                                           # older setups: the setup is named like its variant
+        codes = [variant_code(name)]                             # older setups: the setup is named like its variant
+    plain = bool(codes) and name.lower().replace("_", "-") in [c.lower() for c in codes] + ["-".join(codes).lower()]
+    return name, codes, plain
+
+
+def ppv_label(s):
+    """Studio naming rule. The tool names volumes the way artists do before tagging:
+         always-on grade            PPV_Nuke_<Name>                 PPV_Nuke_Badge
+         variant grade              PPV_Nuke_<code_code>            PPV_Nuke_8WF_9WF
+         named grade for a variant  PPV_Nuke_<Name>_<code_code>     PPV_Nuke_Badge_8WF_9WF
+    Tool Suite > Tag PPV Nuke actors then renames them (tagged_label) and ties them to their variants."""
+    name, codes, plain = _label_parts(s)
+    code = "_".join(c.replace("-", "_") for c in codes)
+    if not codes:
+        return "PPV_Nuke_" + name
+    return "PPV_Nuke_" + (code if plain else name + "_" + code)
+
+
+def tagged_label(s):
+    """The same volume after the Tool Suite tagged it: PPV_Badge, PPV_Variant_8WF-9WF, PPV_Badge_Variant_8WF-9WF."""
+    name, codes, plain = _label_parts(s)
     if not codes:
         return "PPV_" + name
-    plain = name.lower() in [c.lower() for c in codes] + ["_".join(codes).lower()]
     return ("PPV_" if plain else "PPV_" + name + "_") + "Variant_" + "-".join(codes)
+
+
+def setup_labels(s):
+    """Every name the setup's volume may have (lower case): before and after tagging."""
+    return {ppv_label(s).lower(), tagged_label(s).lower()}
+
+
+ADOPTED_TAG = "GradeSheetAdopted"   # the volume existed before the tool used it: never deleted, only untied
+
+
+def _ours(obj):
+    try:
+        return obj is not None and obj.get_path_name().startswith(PKG + "/")
+    except Exception:
+        return False
+
+
+def drop_our_blendables(vol):
+    """Remove the tool's materials from a volume's blendables, keeping everything else."""
+    settings = vol.get_editor_property("settings")
+    keep = [b for b in settings.get_editor_property("weighted_blendables").get_editor_property("array")
+            if not _ours(b.get_editor_property("object"))]
+    wbs = unreal.WeightedBlendables()
+    wbs.set_editor_property("array", keep)
+    settings.set_editor_property("weighted_blendables", wbs)
+    vol.set_editor_property("settings", settings)
 
 
 def set_blendables(vol, mi, grade_w, id_w):
     """The grade volume carries two materials: the grade (weight grade_w) and the stencil ID view (weight id_w).
-    Only the tool's own volume is touched, so only the level the grade lives in is changed."""
+    Anything else in its blendables (for example PPM_NukeGrade materials on an existing volume) is kept as it is."""
     out = []
+    try:
+        for b in vol.get_editor_property("settings").get_editor_property("weighted_blendables").get_editor_property("array"):
+            if not _ours(b.get_editor_property("object")):
+                out.append(b)
+    except Exception:
+        pass
     for obj, w in ((mi, grade_w), (eal.load_asset(PKG + "/M_StencilID"), id_w)):
         if obj:
             wb = unreal.WeightedBlendable()
@@ -486,8 +535,16 @@ class Bridge(object):
             mel.set_material_instance_parent(mi, base)
         vol = self.ppvs.get(sid)
         if vol and lname(vol.get_outer()) != s["target"]:
-            eas.destroy_actor(vol)                               # target level changed: rebuild it there
+            self.release_volume(vol)                             # target level changed: rebuild it there
             vol = None
+        if not vol:
+            vol = self.existing_volume(s)
+            if vol is not None:                                  # a volume with the setup's name is there: use it
+                vol.modify()
+                vol.tags = [str(t) for t in vol.tags if not str(t).startswith(VOL_TAG)] + [VOL_TAG + sid, ADOPTED_TAG]
+                vol.set_editor_property("unbound", True)
+                self.ppvs[sid] = vol
+                glog.info("  using the existing volume %s in %s for %s" % (vol.get_actor_label(), s["target"], sid))
         if not vol:
             try:
                 vol = self.spawn_volume(s["target"])
@@ -496,9 +553,30 @@ class Bridge(object):
             vol.set_editor_property("unbound", True)
             self.ppvs[sid] = vol
         self.name_volume(s)
-        if vol.get_editor_property("priority") != 10.0 + float(s.get("order", 0)):
+        adopted = ADOPTED_TAG in [str(t) for t in vol.tags]
+        if not adopted and vol.get_editor_property("priority") != 10.0 + float(s.get("order", 0)):
             vol.set_editor_property("priority", 10.0 + float(s.get("order", 0)))
         set_blendables(vol, mi, 1.0, 0.0)
+
+    def existing_volume(self, s):
+        """A post process volume in the setup's level named like the setup (before or after tagging) that no other
+        setup uses, or None."""
+        names, used = setup_labels(s), set(id(v) for v in self.ppvs.values())
+        for a in world_actors():
+            if (isinstance(a, unreal.PostProcessVolume) and id(a) not in used and lname(a.get_outer()) == s["target"]
+                    and a.get_actor_label().lower() in names):
+                return a
+        return None
+
+    def release_volume(self, vol):
+        """Let go of a setup's volume: one the tool made is deleted; one that existed before only loses the tool's
+        tag and materials."""
+        if ADOPTED_TAG in [str(t) for t in vol.tags]:
+            vol.modify()
+            vol.tags = [str(t) for t in vol.tags if not str(t).startswith(VOL_TAG) and str(t) != ADOPTED_TAG]
+            drop_our_blendables(vol)
+        else:
+            eas.destroy_actor(vol)
 
     def spawn_volume(self, target):
         """A new post process volume in level `target` (made visible for it). RuntimeError when Unreal refuses."""
@@ -527,7 +605,7 @@ class Bridge(object):
         return vol
 
     def make_color_ppvs(self, levels, codes):
-        """Feature: Create PPVs for colours. In every chosen level, one PPV_Variant_<code> per chosen colour:
+        """Feature: Create PPVs for colours. In every chosen level, one PPV_Nuke_<code_code> per chosen colour:
         unbound, enabled, attached to the level's PPV_CarPaint actor (or in the PPV_CarPaint outliner folder).
         A volume that is already there (same label in that level) is left alone. Tagging the volumes to their
         variants is done afterwards with the studio's Tool Suite (Tag PPV Nuke actors)."""
@@ -545,7 +623,11 @@ class Bridge(object):
                           and not isinstance(a, unreal.PostProcessVolume)), None)
             locked = None
             for code in codes:
-                label = "PPV_Variant_" + variant_code(code)
+                vc = variant_code(code)
+                label = "PPV_Nuke_" + vc.replace("-", "_")           # the Tool Suite renames it PPV_Variant_<vc>
+                if ("ppv_variant_" + vc).lower() in have:            # already tagged by the Tool Suite
+                    skipped.append("%s in %s" % ("PPV_Variant_" + vc, lv))
+                    continue
                 if locked:                                       # one refusal is enough to know the level is locked
                     failed.append("%s in %s: level locked (see above)" % (label, lv))
                     continue
@@ -600,12 +682,13 @@ class Bridge(object):
             return False
         label, tag = ppv_label(s), VOL_TAG + s["id"]
         tags = [str(t) for t in vol.tags]
-        if vol.get_actor_label() == label and tag in tags:
+        named = vol.get_actor_label().lower() in setup_labels(s)  # PPV_Nuke_... or already tagged by the Tool Suite
+        if named and tag in tags:
             return False
         vol.modify()
         if tag not in tags:
             vol.tags = [t for t in tags if not t.startswith(VOL_TAG)] + [tag]
-        if vol.get_actor_label() != label:
+        if not named:
             vol.set_actor_label(label)
         return True
 
@@ -613,7 +696,7 @@ class Bridge(object):
         glog.info("removing setup %s" % sid)
         vol = self.ppvs.pop(sid, None)
         if vol:
-            eas.destroy_actor(vol)
+            self.release_volume(vol)
         for name in ("MI_Grade_", "T_Mask_"):
             if eal.does_asset_exist(PKG + "/" + name + sid):
                 eal.delete_asset(PKG + "/" + name + sid)
@@ -769,12 +852,21 @@ class Bridge(object):
                                     % pk.get_name().split("/")[-1])
                 else:
                     writable.append(pk)
+            sc = getattr(unreal, "SourceControl", None)          # Perforce: check the levels out before saving
+            try:
+                if sc is not None and sc.is_enabled():
+                    for pk in writable:
+                        ok = sc.check_out_or_add_file(pk.get_name(), True)
+                        glog.info("  check out %s: %s%s" % (pk.get_name(), "ok" if ok else "FAILED",
+                                                           "" if ok else " (" + str(sc.last_error_msg()) + ")"))
+            except Exception:
+                glog.warn("could not check the levels out (source control)")
             glog.info("save grades: %s and levels %s" % (PKG, ", ".join(p.get_name() for p in writable) or "none"))
             if writable:
                 unreal.EditorLoadingAndSavingUtils.save_packages(writable, True)
             try:                                                 # anything Unreal still has unsaved?
                 still = set(p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages())
-                problems += ["%s not saved (see the Output Log)" % p.get_name().split("/")[-1]
+                problems += ["%s not saved: is it checked out in Perforce / not read-only? (see the Output Log)" % p.get_name().split("/")[-1]
                              for p in writable if p.get_name() in still]
             except Exception:
                 pass
