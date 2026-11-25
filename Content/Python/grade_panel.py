@@ -106,6 +106,30 @@ def level_info():
 _DONT_MODIFY = getattr(getattr(unreal, "LevelVisibilityDirtyMode", None), "DONT_MODIFY", None)
 
 
+def perf_settings():
+    """Editor Preferences > Performance (holds 'Use Less CPU when in Background'). Newer engines (5.6) no longer
+    expose the class to Python by name, so the settings object is then looked up by its path."""
+    cls = getattr(unreal, "EditorPerformanceSettings", None)
+    if cls is not None:
+        try:
+            return unreal.get_default_object(cls)
+        except Exception:
+            pass
+    for path in ("/Script/UnrealEd.Default__EditorPerformanceSettings",):
+        for fn in ("find_object", "load_object"):
+            f = getattr(unreal, fn, None)
+            if f is None:
+                continue
+            try:
+                obj = f(None, path)
+                if obj is not None:
+                    obj.get_editor_property("throttle_cpu_when_not_foreground")      # the property is reachable
+                    return obj
+            except Exception:
+                pass
+    return None
+
+
 def set_visible(level, on):
     """Show or hide a level WITHOUT marking it as changed (so it never ends up in the save dialog)."""
     if _DONT_MODIFY is not None:
@@ -218,6 +242,7 @@ class Bridge(object):
         self.slate_sleep, self.realtime = None, None       # editor settings changed for a capture (None = untouched)
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
         self.in_tick, self.reentered = False, 0                 # see tick()
+        self.perf_note = ""                                # shown while capturing when Unreal may stop drawing
         self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
         self.last_levels = None                            # levels of the setup shown last (capture, or View in Unreal)
         self.result = None                                 # answer to the last one-off job (e.g. colour PPVs), for the window
@@ -854,7 +879,9 @@ class Bridge(object):
         are switched off, and the user's own settings are put back afterwards."""
         sl = unreal.SystemLibrary
         try:
-            perf = unreal.get_default_object(unreal.EditorPerformanceSettings)
+            perf = perf_settings()
+            if perf is None:
+                raise RuntimeError("the Editor Performance settings are not reachable from Python in this engine")
             if on:
                 if self.throttle is None:
                     self.throttle = perf.get_editor_property("throttle_cpu_when_not_foreground")
@@ -864,6 +891,9 @@ class Bridge(object):
                 self.throttle = None
         except Exception:
             glog.error("could not change 'use less CPU in background'")
+            if on:
+                self.perf_note = ("Unreal draws nothing while this window is in front: turn off Editor Preferences > "
+                                  "Performance > Use Less CPU when in Background")
         try:                                                     # the editor interface must keep ticking
             if on and self.slate_sleep is None:
                 try:
@@ -959,7 +989,8 @@ class Bridge(object):
                 if waited >= 3 and waited != self.shot_shown:
                     self.shot_shown = waited
                     self.write_state("%s: waiting for Unreal to write the picture (%d s)%s" % (
-                        label, waited, ". If this keeps counting, click once on the Unreal window" if waited >= 15 else ""))
+                        label, waited, (". " + self.perf_note if self.perf_note else
+                                        ". If this keeps counting, click once on the Unreal window") if waited >= 15 else ""))
                     if waited in (15, 45):
                         warn("still waiting for %s after %d s" % (os.path.basename(path), waited))
                         glog.warn("  " + self.editor_text())
@@ -1030,7 +1061,7 @@ class Bridge(object):
         except Exception:
             pass
         try:
-            thr = unreal.get_default_object(unreal.EditorPerformanceSettings).get_editor_property("throttle_cpu_when_not_foreground")
+            thr = perf_settings().get_editor_property("throttle_cpu_when_not_foreground")
         except Exception:
             thr = "?"
         return "viewport Realtime %s | use-less-CPU-in-background %s | Slate.AllowSlateToSleep %s | r.HighResScreenshotDelay %s | t.MaxFPS %s | r.ScreenPercentage %s" % (
@@ -1137,14 +1168,15 @@ class Bridge(object):
     def start(self):
         try:
             world = get_world()
-            perf = unreal.get_default_object(unreal.EditorPerformanceSettings)
+            perf = perf_settings()
             glog.info("=" * 70)
             glog.info("Grade Sheet opened | Unreal %s | project %s | map %s" % (
                 unreal.SystemLibrary.get_engine_version(), PROJECT, world.get_name() if world else "?"))
             glog.info("%d sublevels, %d cine cameras, %d setups | assets in %s | captures in %s" % (
                 len(sublevels()), len(self.cams), len(self.cfg["setups"]), PKG, CAP_DIR))
             glog.info("read-only levels: %s" % (", ".join(l["name"] for l in level_info() if l["readonly"]) or "none"))
-            glog.info("editor 'use less CPU in background': %s" % perf.get_editor_property("throttle_cpu_when_not_foreground"))
+            glog.info("editor 'use less CPU in background': %s" % (
+                perf.get_editor_property("throttle_cpu_when_not_foreground") if perf else "not reachable from Python"))
         except Exception:
             glog.error("could not write the session header")
         unreal.SystemLibrary.execute_console_command(None, "r.CustomDepth 3")   # stencil on
