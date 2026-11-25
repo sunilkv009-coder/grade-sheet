@@ -61,16 +61,19 @@ For a setup named `Overall` on a camera `Cam_01`:
 | Grade material instance | `MI_Grade_Cam_01__Overall` | `Content/GradeSheet` |
 | Drawn-shape mask texture | `T_Mask_Cam_01__Overall` | `Content/GradeSheet` |
 
-Post process volumes follow this naming rule:
+Post process volumes are named the way artists name them before tagging (everything starts with `PPV_Nuke_`).
+The studio Tool Suite (PPV and CCR > Tag PPV Nuke actors) then renames and tags them:
 
-| Setup | Volume name | Example |
+| Setup | Name the tool gives | After Tool Suite tagging |
 | --- | --- | --- |
-| Always on | `PPV_<Name>` | `PPV_Badge` |
-| Tied to variants, named like the variant | `PPV_Variant_<code-code>` | `PPV_Variant_8WF-9WF` |
-| Tied to variants, with its own name | `PPV_<Name>_Variant_<code-code>` | `PPV_Badge_Variant_8WF-9WF` |
+| Always on | `PPV_Nuke_<Name>` (`PPV_Nuke_Badge`) | `PPV_Badge` |
+| Tied to variants, named like the variant | `PPV_Nuke_<code_code>` (`PPV_Nuke_8WF_9WF`) | `PPV_Variant_8WF-9WF` |
+| Tied to variants, with its own name | `PPV_Nuke_<Name>_<code_code>` (`PPV_Nuke_Badge_8WF_9WF`) | `PPV_Badge_Variant_8WF-9WF` |
 
-Each camera's volume sits in that camera's level, so the same name can appear once per camera level. Volumes made
-by an older version (`PPV_Grade_...`) are renamed the next time you open the panel; save the levels afterwards.
+If a volume with either name already exists in the setup's level, the tool uses it instead of making a new one: it
+adds its grade material to that volume's blendables and keeps everything else (for example PPM_NukeGrade materials),
+its name and its priority. Such a volume is never deleted by the tool. A setup whose volume does not exist gets one
+when the Grade Sheet opens, before a capture and on Save grades. Each camera's volume sits in that camera's level.
 
 The grade switches on and off with its level, so no extra Blueprint logic is needed at runtime. A setup tied to a
 variant is left **disabled** at rest; enable the volume whose name ends with the active variant from your own
@@ -112,7 +115,7 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 - **Drawing inside parts**: on a layer that has stencil parts and no shape yet, Draw a new shape draws into that
   layer, so only the parts inside the shape are graded (a roto inside a matte).
 - **Create PPVs for colours** (Setups > Create PPVs for colours): tick the levels, then the colours from Variant
-  Manager (tables with COLOR in the name; otherwise every table). Unreal makes one `PPV_Variant_<code>` per colour in
+  Manager (tables with COLOR in the name; otherwise every table). Unreal makes one `PPV_Nuke_<code_code>` per colour in
   each level: unbound, enabled, attached to the level's `PPV_CarPaint` actor (or put in a `PPV_CarPaint` folder).
   Volumes that are already there are left alone; locked (read-only) levels are reported. Afterwards tag the volumes
   with Tool Suite > PPV and CCR > Tag PPV Nuke actors, and save the levels.
