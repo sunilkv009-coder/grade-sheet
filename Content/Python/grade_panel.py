@@ -82,6 +82,44 @@ def lname(obj):
     return obj.get_path_name().split("/")[-1].split(".")[0]
 
 
+def world_actors():
+    """Every actor of the editor world, INCLUDING those in hidden sublevels. Unreal's actor list skips hidden levels,
+    and after a capture only the last camera's levels are visible, so cameras and grade volumes elsewhere would look
+    missing (save then said 'no grade volume', and Done made duplicates). Cameras and volumes in hidden levels are
+    added from the list of all loaded objects."""
+    out = list(eas.get_all_level_actors())
+    seen = set(id(a) for a in out)
+    it = getattr(unreal, "ObjectIterator", None)
+    world = get_world()
+    if it is None or world is None:
+        return out
+    try:
+        wpath = world.get_path_name()
+    except Exception:
+        wpath = None
+    for cls in (unreal.CineCameraActor, unreal.PostProcessVolume):
+        try:
+            for a in it(cls):
+                if id(a) in seen or a in out:
+                    continue
+                try:
+                    p = a.get_path_name()
+                    if "Default__" in p or not unreal.SystemLibrary.is_valid(a):
+                        continue
+                    lw = a.get_world() if hasattr(a, "get_world") else None
+                    if wpath and lw is not None and lw.get_path_name() != wpath:
+                        continue                                  # another world (a preview, play-in-editor...)
+                    if lname(a.get_outer()) not in sublevels():
+                        continue                                  # only actors of this world's sublevels
+                except Exception:
+                    continue
+                out.append(a)
+                seen.add(id(a))
+        except Exception:
+            glog.warn("could not list %s in hidden levels" % cls.__name__)
+    return out
+
+
 def sublevels():
     """name -> Level, without the persistent level."""
     levels = unreal.EditorLevelUtils.get_levels(get_world())
@@ -270,7 +308,7 @@ class Bridge(object):
         """Cameras, grade volumes and stencil parts currently in the world."""
         t0 = time.time()
         self.cams, self.ppvs, parts, lv = {}, {}, {}, {}
-        for a in eas.get_all_level_actors():
+        for a in world_actors():
             if isinstance(a, unreal.CineCameraActor):
                 self.cams[a.get_actor_label()] = a
             elif isinstance(a, unreal.PostProcessVolume):
@@ -475,6 +513,10 @@ class Bridge(object):
         variants is done afterwards with the studio's Tool Suite (Tag PPV Nuke actors)."""
         made, skipped, failed = [], [], []
         vis = {n: is_visible(l) for n, l in sublevels().items()}
+        subs = sublevels()
+        for lv in levels:                                        # Unreal does not list actors of hidden levels, so
+            if lv in subs and vis.get(lv) is not True:           # show them first; put back at the end
+                set_visible(subs[lv], True)
         actors = eas.get_all_level_actors()
         for lv in levels:
             have = {a.get_actor_label().lower(): a for a in actors
