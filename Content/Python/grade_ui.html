@@ -811,7 +811,7 @@ document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
   if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !e.altKey && cur()) return toggleSolo(S.sel);     // F = full view on / off
   if (e.key === "Enter" && S.drawing) closeShape();
-  else if (e.key === "Escape") { cancelDraw(); syncPanel(); refresh(); }
+  else if (e.key === "Escape") { cancelDraw(); S.shape = -1; syncPanel(); refresh(); }
   else if ((e.key === "Delete" || e.key === "Backspace") && S.shape >= 0 && !S.drawing) deleteShape(S.shape);
 });
 </script>
@@ -1038,6 +1038,11 @@ function noteChange() {
   lastSnap = now;
 }
 document.addEventListener("pointerdown", () => { gestureOpen = true; gesturePushed = false; }, true);
+// a click anywhere outside the selected camera's picture and the side panel lets go of the selected shape
+// (its outline disappears), like clicking off a roto shape in Nuke
+document.addEventListener("pointerdown", e => {
+  if (S.shape < 0 || S.drawing || e.target.closest("aside") || (curCam() && curCam().el.contains(e.target))) return;
+  S.shape = -1; syncPanel(); refresh(); });
 document.addEventListener("pointerup", () => { gestureOpen = false; }, true);
 function sendShapes(su) { clearTimeout(maskTimers[su.id]); maskTimers[su.id] = setTimeout(() => {
   su.mask.toBlob(b => fetch("/mask/" + su.id, { method:"POST", body:b }).catch(() => {}), "image/png");
