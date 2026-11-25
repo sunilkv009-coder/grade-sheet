@@ -105,6 +105,12 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
   scene, raise `SHOT_FRAMES` (and `SETTLE_SEC`) at the top of `Content/Python/grade_panel.py`.
 - **Stencil IDs box** in a layer's mask: type the stencil IDs to grade and press Enter, for example `20` for the
   car paint, or `20, 31-33`. `0` is the background. It stays in step with the part chips and Pick parts.
+- **Grow / shrink and Soften edge** under the Stencil IDs box, like Erode / Dilate and Blur on a matte in Nuke.
+  Grow / shrink moves the edge of the layer's stencil parts out (plus) or in (minus); Soften edge blurs it. Both are
+  in pixels at 1080 lines, so a value looks the same at any capture size. They work on the stencil parts only;
+  drawn shapes keep their own feather.
+- **Drawing inside parts**: on a layer that has stencil parts and no shape yet, Draw a new shape draws into that
+  layer, so only the parts inside the shape are graded (a roto inside a matte).
 - **Create PPVs for colours** (Setups > Create PPVs for colours): tick the levels, then the colours from Variant
   Manager (tables with COLOR in the name; otherwise every table). Unreal makes one `PPV_Variant_<code>` per colour in
   each level: unbound, enabled, attached to the level's `PPV_CarPaint` actor (or put in a `PPV_CarPaint` folder).

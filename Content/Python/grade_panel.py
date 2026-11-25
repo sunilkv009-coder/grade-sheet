@@ -311,7 +311,14 @@ class Bridge(object):
                         mask += [j * 24 + b + 1 for b in range(24) if bits >> b & 1 and j * 24 + b + 1 <= MAX_ID]
                     if mel.get_material_instance_scalar_parameter_value(mi, prefix + "BG") > 0.5:
                         mask.insert(0, 0)                  # 0 = background (everything without a stencil ID)
-            layers.append({"params": params, "mask": mask})
+            edge = {}
+            if mi and k:
+                for e in ("Grow", "Soft"):
+                    try:
+                        edge[e.lower()] = mel.get_material_instance_scalar_parameter_value(mi, prefix + e)
+                    except Exception:
+                        pass
+            layers.append(dict({"params": params, "mask": mask}, **edge))
         return layers
 
     def apply(self, sid, layers):
@@ -337,6 +344,8 @@ class Bridge(object):
                 mel.set_material_instance_scalar_parameter_value(mi, prefix + "UseParts", 1.0 if (bits or bg) else 0.0)
                 mel.set_material_instance_scalar_parameter_value(
                     mi, prefix + "UseShape", 1.0 if layers[k].get("shape") else 0.0)
+                for e in ("Grow", "Soft"):                 # stencil edge: pixels at 1080 lines (Grow < 0 = erode)
+                    mel.set_material_instance_scalar_parameter_value(mi, prefix + e, float(layers[k].get(e.lower(), 0) or 0))
         mel.update_material_instance(mi)
         return mi
 
