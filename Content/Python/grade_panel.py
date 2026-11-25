@@ -217,6 +217,7 @@ class Bridge(object):
         self.next_shot_check, self.throttle = 0.0, None
         self.slate_sleep, self.realtime = None, None       # editor settings changed for a capture (None = untouched)
         self.cap_ids, self.progress, self.gone_logged = [], [0, 0], False
+        self.in_tick, self.reentered = False, 0                 # see tick()
         self.shot_delay = None                             # r.HighResScreenshotDelay before a picture (None = untouched)
         self.last_levels = None                            # levels of the setup shown last (capture, or View in Unreal)
         self.result = None                                 # answer to the last one-off job (e.g. colour PPVs), for the window
@@ -1059,9 +1060,9 @@ class Bridge(object):
                 wait = " | waiting %.0f s for %s" % (self.t - (deadline - SHOT_TIMEOUT), os.path.basename(path))
             elif self.t < self.cap_until:
                 wait = " | settling, %.1f s left" % (self.cap_until - self.t)
-            glog.info("  heartbeat: %d/%d done, step %s%s | %d frames in %.0f s (slowest %.2f s) | in front: %s" % (
+            glog.info("  heartbeat: %d/%d done, step %s%s | %d frames in %.0f s (slowest %.2f s) | re-entered %d | in front: %s" % (
                 self.progress[0], self.progress[1], hb["step"] or "-", wait, hb["ticks"], HEARTBEAT_SEC,
-                hb["max_dt"], gdiag.foreground_text(os.getpid())))
+                hb["max_dt"], self.reentered, gdiag.foreground_text(os.getpid())))
         hb.update(next=now + HEARTBEAT_SEC, ticks=0, max_dt=0.0)
         try:                                                     # for the window's observer: Unreal is still running
             with open(os.path.join(CAP_DIR, "alive.txt"), "w") as f:
@@ -1082,6 +1083,19 @@ class Bridge(object):
 
     # ------------------------------------------------------------ lifetime
     def tick(self, dt):
+        # Unreal can run this callback again from INSIDE a call it makes (a screenshot request or a level visibility
+        # change pumps the interface). Working in that inner call nests level changes, which crashes Unreal with
+        # "Assertion failed: Level->bIsVisible == bShouldBeVisible". So the inner call does nothing.
+        if self.in_tick:
+            self.reentered += 1
+            return
+        self.in_tick = True
+        try:
+            self.tick_once(dt)
+        finally:
+            self.in_tick = False
+
+    def tick_once(self, dt):
         try:
             gone = self.proc is not None and self.proc.poll() is not None      # the window was closed
             if not self.alive or (gone and not (self.cap_queue or self.shot_wait)):
