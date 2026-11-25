@@ -6,13 +6,14 @@ and engine version without shipping .uasset files.
                                + tonal gains (shadows, midtones, highlights)
                                + saturation (applied last, around the Rec.709 luminance)
                   each layer's mask = (stencil parts / background, if chosen) x (drawn shapes, if drawn)
+                  the stencil part of a mask can grow / shrink (dilate / erode) and soften (blur) at its edge
     M_StencilID   shows custom stencil IDs as colour (used for the part picker capture)
     T_Mask_None   black default for the drawn-shape mask
 """
 import os, struct, zlib
 import unreal
 
-VERSION = "6"                      # bump to rebuild the materials in existing projects
+VERSION = "7"                      # bump to rebuild the materials in existing projects
 PARAMS = [("Blackpoint", 0.0), ("Whitepoint", 1.0), ("Lift", 0.0), ("Gain", 1.0),
           ("Multiply", 1.0), ("Offset", 0.0), ("Gamma", 1.0),
           ("Shadows", 1.0), ("Midtones", 1.0), ("Highlights", 1.0), ("Saturation", 1.0)]
@@ -58,6 +59,43 @@ def _default_mask(pkg, tmp_dir):
     tex.set_editor_property("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
     eal.save_asset(path, False)
     return tex
+
+
+# One layer's stencil-parts mask, with its edge moved (Grow, pixels at 1080 lines; negative = erode) and
+# softened (Soft, pixels at 1080 lines). The signed distance to the nearest pixel on the other side of the edge
+# is found on rings of 16 samples, then mask = saturate((distance + grow) / soft + 0.5). The same maths runs
+# in the window (grade_ui.html, partMask) so the preview matches.
+# Cen = the stencil at this pixel. IDs: W0..W10 hold 24 stencil IDs each (bit (id-1)%24 of word (id-1)/24); BG = 1 grades the background (ID 0).
+EDGE_HLSL = r"""
+float W[11] = { W0, W1, W2, W3, W4, W5, W6, W7, W8, W9, W10 };
+float2 uv0 = GetDefaultSceneTextureUV(Parameters, STENCIL_ID);
+float sc = max(VS.y, 1.0) / 1080.0;
+float g = Grow * sc;
+float b = max(Soft, 0.0) * sc;
+float idc = round(Cen.r);
+float c = BG;
+if (idc > 0.5) { float i1 = min(idc, 255.0) - 1.0; float wi = floor(i1 / 24.0);
+  c = fmod(floor(W[(int)wi] / exp2(i1 - wi * 24.0)), 2.0) >= 0.5 ? 1.0 : 0.0; }
+if (abs(g) < 0.01 && b < 0.01) return c;
+float R = min(abs(g) + b * 0.5 + 1.0, 96.0);
+float st = max(1.0, R / 16.0);
+float m = R + 1.0;
+[loop] for (int ri = 1; ri <= 17; ri++) {
+  float r = ri * st;
+  if (r > R + 0.001 || r >= m) break;
+  [loop] for (int a = 0; a < 16; a++) {
+    float ang = (a + 0.5 * (ri % 2)) * 0.3926991;
+    float2 uv = uv0 + float2(cos(ang), sin(ang)) * r * Inv;
+    float idn = round(SceneTextureLookup(uv, STENCIL_ID, false).r);
+    float cn = BG;
+    if (idn > 0.5) { float j1 = min(idn, 255.0) - 1.0; float wj = floor(j1 / 24.0);
+      cn = fmod(floor(W[(int)wj] / exp2(j1 - wj * 24.0)), 2.0) >= 0.5 ? 1.0 : 0.0; }
+    if (cn != c) m = min(m, r);
+  }
+}
+float s = (c > 0.5 ? 1.0 : -1.0) * (m - 0.5) + g;
+return b > 0.01 ? saturate(s / b + 0.5) : (s > 0.0 ? 1.0 : 0.0);
+"""
 
 
 def build_grade(mat, none_tex):
@@ -112,28 +150,7 @@ def build_grade(mat, none_tex):
 
     sten = new(unreal.MaterialExpressionSceneTexture, -2900, 50)
     sten.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_CUSTOM_STENCIL)
-    rnd = new(unreal.MaterialExpressionRound, -2500, 50)
-    mel.connect_material_expressions(chan(sten, "Color", "r", -2650, 50), "", rnd, "")
-    # stencil IDs 1-255 are stored 24 to a scalar (a float holds 24 bits exactly): word = (id-1)/24, bit = (id-1)%24
-    def unary(cls, src, x, y):
-        e = new(cls, x, y)
-        mel.connect_material_expressions(src, "", e, "")
-        return e
-    k24 = const(24.0, -2900, -120)
-    idx = op(S, rnd, one, -2350, 50)
-    word = unary(unreal.MaterialExpressionFloor, op(D, idx, k24, -2250, -40), -2150, -40)
-    low = op(S, idx, op(M, word, k24, -2050, -40), -1950, 50)
-    bit = unary(unreal.MaterialExpressionRound,
-                op(unreal.MaterialExpressionPower, two, low, -1850, 50, "Base", "Exp"), -1750, 50)
-    is_word = []                                         # 1 where the pixel's ID is in word j
-    for j in range(11):
-        d = unary(unreal.MaterialExpressionAbs, op(S, word, const(float(j), -2900, -1700 - j * 60), -2650, -1700 - j * 60),
-                  -2500, -1700 - j * 60)
-        is_word.append(unary(unreal.MaterialExpressionOneMinus,
-                             unary(unreal.MaterialExpressionSaturate, d, -2350, -1700 - j * 60), -2200, -1700 - j * 60))
-    satid = new(unreal.MaterialExpressionSaturate, -2350, 200)
-    mel.connect_material_expressions(rnd, "", satid, "")
-    notcar = op(S, one, satid, -2200, 200)               # 1 where there is no stencil (background)
+    vsize = new(unreal.MaterialExpressionViewSize, -2900, 200)
 
     scr = new(unreal.MaterialExpressionScreenPosition, -2900, 350)
     shape = new(unreal.MaterialExpressionTextureSampleParameter2D, -2650, 350)
@@ -182,16 +199,30 @@ def build_grade(mat, none_tex):
     out = grade(x, LAYERS[0][0], LAYERS[0][1], 0)
     for k, (prefix, group) in enumerate(LAYERS[1:]):
         y0 = 2600 * (k + 1)
-        fl = new(unreal.MaterialExpressionFloor, -1900, y0 - 500)
-        bits = None
-        for j in range(11):                              # "Mask" = IDs 1-24 (as before), "Mask1" = 25-48, ...
-            w = op(M, scalar(prefix + ("Mask%d" % j if j else "Mask"), group, -2500, y0 - 1300 + j * 60), is_word[j],
-                   -2300, y0 - 1300 + j * 60)
-            bits = w if bits is None else op(A, bits, w, -2150, y0 - 1300 + j * 60)
-        mel.connect_material_expressions(op(D, bits, bit, -2050, y0 - 500), "", fl, "")
-        part = op(unreal.MaterialExpressionFmod, fl, two, -1750, y0 - 500)
-        part = op(unreal.MaterialExpressionMax, part, op(M, scalar(prefix + "BG", group, -2200, y0 - 600), notcar, -1950, y0 - 600),
-                  -1650, y0 - 600)
+        part = new(unreal.MaterialExpressionCustom, -1900, y0 - 700)
+        try:
+            sid = int(unreal.SceneTextureId.PPI_CUSTOM_STENCIL.value)
+        except Exception:
+            sid = 25
+        part.set_editor_property("code", EDGE_HLSL.replace("STENCIL_ID", str(sid)))
+        part.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+        part.set_editor_property("description", "Stencil parts (grow / soften)")
+        names = ["W%d" % j for j in range(11)] + ["BG", "Grow", "Soft", "Inv", "VS", "Cen"]
+        ins = []
+        for n in names:
+            ci = unreal.CustomInput()
+            ci.set_editor_property("input_name", n)
+            ins.append(ci)
+        part.set_editor_property("inputs", ins)
+        for j in range(11):
+            mel.connect_material_expressions(scalar(prefix + ("Mask%d" % j if j else "Mask"), group, -2500, y0 - 1300 + j * 60),
+                                             "", part, "W%d" % j)
+        mel.connect_material_expressions(scalar(prefix + "BG", group, -2500, y0 - 600), "", part, "BG")
+        mel.connect_material_expressions(scalar(prefix + "Grow", group, -2500, y0 - 540), "", part, "Grow")
+        mel.connect_material_expressions(scalar(prefix + "Soft", group, -2500, y0 - 480), "", part, "Soft")
+        mel.connect_material_expressions(sten, "InvSize", part, "Inv")
+        mel.connect_material_expressions(vsize, "", part, "VS")
+        mel.connect_material_expressions(sten, "Color", part, "Cen")     # also keeps the stencil texture bound
         use_parts = scalar(prefix + "UseParts", group, -2200, y0 - 400)
         use_shape = scalar(prefix + "UseShape", group, -2200, y0 - 300)
         pm = lerp(one, part, use_parts, -1550, y0 - 500)

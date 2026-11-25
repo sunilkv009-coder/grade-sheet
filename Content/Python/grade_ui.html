@@ -118,6 +118,7 @@
   .sid { display:flex; align-items:center; gap:8px; margin:6px 0; } .sid span { color:var(--mute); font-size:12px; white-space:nowrap; }
   .sid input { flex:1; font-family:ui-monospace,Consolas,monospace; }
   .sid input.bad { border-color:var(--warn); }
+  .edge { margin:2px 0 8px; } .edge .tr { margin:4px 0; } .edge.off { opacity:.55; } .enm { color:var(--mute); font-size:12px; width:86px; white-space:nowrap; cursor:default; }
   #parts .cnt { width:100%; color:var(--mute); font-size:11px; }
   #lvmenu button.wide { width:100%; margin-top:6px; }
   #parts .chip.on { background:rgba(255,80,200,.18); border-color:#ff50c8; color:#ffb3ea; }
@@ -235,6 +236,12 @@
         <p class="lbl sp">Mask by car parts</p>
         <div class="sid"><span>Stencil IDs</span><input type="text" id="sidbox" placeholder="for example 20, or 20, 31-33"
           title="Type the stencil IDs this layer grades and press Enter (Esc cancels). 0 = background (everything without an ID). Ranges like 31-33 work. Empty + Enter clears the parts."></div>
+        <div class="edge" title="Pixels at 1080 lines, so the same value looks the same at any capture size">
+          <div class="tr"><span class="enm" title="Like Nuke's Erode / Dilate: minus shrinks the parts' edge, plus grows it. Double-click to reset">Grow / shrink</span>
+            <input type="range" id="egrow" min="-30" max="30" step="0.5"><input type="number" class="val" id="egrowv" step="any"></div>
+          <div class="tr"><span class="enm" title="Like a Blur on the matte: softens the parts' edge. Double-click to reset">Soften edge</span>
+            <input type="range" id="esoft" min="0" max="60" step="0.5"><input type="number" class="val" id="esoftv" step="any" min="0"></div>
+        </div>
         <div class="btns three">
           <button id="pick">Pick parts</button><button id="show">Show mask</button><button id="clear">Clear</button>
         </div>
@@ -274,13 +281,14 @@ const $ = id => document.getElementById(id);
 const S = { cams:[], setups:[], parts:[], levels:[], allCams:[], maxCams:8, sel:0, ref:0, layer:0, compare:false, refOn:false, solo:false, wipe:0.5,
             tool:"none", show:false, clip:null, shape:-1, drawing:false, drag:null, captureId:null, toastUntil:0, waitReload:false };
 
-const defLayer = () => ({ params:Object.fromEntries(P.map(p => [p[0],[p[1],p[1],p[1]]])), mask:[] });
+const defLayer = () => ({ params:Object.fromEntries(P.map(p => [p[0],[p[1],p[1],p[1]]])), mask:[], grow:0, soft:0 });
 function normLayers(src) {
   const out = [];
   for (let k = 0; k < NL; k++) {
     const L = defLayer(), s = (src || [])[k] || {};
     for (const p of P) { const v = (s.params || {})[p[0]]; if (Array.isArray(v) && v.length === 3) L.params[p[0]] = v.map(Number); }
     L.mask = (s.mask || []).map(Number);
+    L.grow = isFinite(+s.grow) ? +s.grow : 0; L.soft = isFinite(+s.soft) ? Math.max(0, +s.soft) : 0;
     out.push(L);
   }
   return out;
@@ -292,7 +300,7 @@ const camOf = su => S.cams.find(c => c.name === su.cam);
 const post = (cmd) => fetch("/cmd", { method:"POST", body:JSON.stringify(cmd) }).catch(() => {});
 function toast(msg) { $("status").textContent = msg; S.toastUntil = Date.now() + 2500; }
 const hasShape = (su, k) => su.shapes.some(s => s.layer === k && s.closed);
-const payload = su => su.layers.map((L, k) => ({ params:L.params, mask:L.mask, shape:k > 0 && hasShape(su, k) }));
+const payload = su => su.layers.map((L, k) => ({ params:L.params, mask:L.mask, shape:k > 0 && hasShape(su, k), grow:L.grow || 0, soft:L.soft || 0 }));
 // every setup that is on together with su: the camera's always-on setups whose level is active, plus su itself.
 // Variant setups (paint codes) are never on together, so another variant is not included.
 const chainOf = su => S.setups.filter(p => p.cam === su.cam && (p === su || (!p.variant && su.levels.includes(p.target)))).sort((a, b) => a.order - b.order);
@@ -337,6 +345,7 @@ in vec2 v; out vec4 o;
 uniform sampler2D uImg; uniform sampler2D uId; uniform sampler2D uShape; uniform sampler2D uRaw;
 uniform sampler2D uRef; uniform vec4 uRefFit; uniform int uLeft;
 uniform vec3 uP[${NL * NP}]; uniform sampler2D uLut; uniform float uUse[6]; uniform int uShow; uniform float uWipe;
+uniform vec2 uEdge[3]; uniform vec2 uTexel; uniform float uScale;
 vec3 grade(vec3 x, int k){
   int b = k * ${NP};
   vec3 den = uP[b+1] - uP[b];
@@ -350,9 +359,30 @@ vec3 grade(vec3 x, int k){
   float lt = dot(t, vec3(.2126, .7152, .0722));
   return max(vec3(lt) + (t - lt) * uP[b+${SAT}], vec3(0.));
 }
+float inPart(vec2 uv, int k){                          // 1 if the stencil ID at uv is one of layer k's parts
+  int id = int(texture(uId, uv).r * 255. + .5);
+  return texelFetch(uLut, ivec2(id, 0), 0)[k-1];
+}
+// stencil parts with the edge moved (grow, < 0 = erode) and softened; same maths as EDGE_HLSL in grade_assets.py
+float partMask(int k, float c){
+  float g = uEdge[k-1].x * uScale, b = max(uEdge[k-1].y, 0.) * uScale;
+  if (abs(g) < .01 && b < .01) return c;
+  float R = min(abs(g) + b * .5 + 1., 96.), st = max(1., R / 16.), m = R + 1.;
+  for (int ri = 1; ri <= 17; ri++) {
+    float r = float(ri) * st;
+    if (r > R + .001 || r >= m) break;
+    for (int a = 0; a < 16; a++) {
+      float ang = (float(a) + .5 * float(ri % 2)) * .3926991;
+      if (inPart(v + vec2(cos(ang), sin(ang)) * r * uTexel, k) != c) m = min(m, r);
+    }
+  }
+  float s = (c > .5 ? 1. : -1.) * (m - .5) + g;
+  return b > .01 ? clamp(s / b + .5, 0., 1.) : (s > 0. ? 1. : 0.);
+}
 float lmask(int k, vec3 m, vec3 s){
   float up = uUse[(k-1)*2], us = uUse[(k-1)*2+1];
-  return mix(1., m[k-1], up) * mix(1., s[k-1], us) * max(up, us);
+  float pm = up > .5 ? partMask(k, m[k-1]) : 1.;
+  return pm * mix(1., s[k-1], us) * max(up, us);
 }
 void main(){
   if (v.x < uWipe) {                                   // left of the divider: the ungraded capture, or the reference image
@@ -392,7 +422,7 @@ function initGL(cam) {
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   cam.gl = gl; cam.u = {};
-  for (const n of ["uImg","uId","uShape","uRaw","uRef","uRefFit","uLeft","uP","uLut","uUse","uShow","uWipe"]) cam.u[n] = gl.getUniformLocation(pr, n);
+  for (const n of ["uImg","uId","uShape","uRaw","uRef","uRefFit","uLeft","uP","uLut","uUse","uShow","uWipe","uEdge","uTexel","uScale"]) cam.u[n] = gl.getUniformLocation(pr, n);
   gl.uniform1i(cam.u.uImg, 0); gl.uniform1i(cam.u.uId, 1); gl.uniform1i(cam.u.uShape, 2); gl.uniform1i(cam.u.uRaw, 3); gl.uniform1i(cam.u.uRef, 4); gl.uniform1i(cam.u.uLut, 5);
   cam.lut = mkTex(gl, gl.NEAREST);
   cam.fbo = [0, 1].map(() => ({ fb:gl.createFramebuffer(), tex:mkTex(gl, gl.LINEAR), w:0, h:0 }));   // for stacked setups
@@ -417,14 +447,16 @@ function draw(cam) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, last ? null : cam.fbo[i % 2].fb);
     gl.viewport(0, 0, su.w, su.h);
     bind(0, i === 0 ? su.tex.img : cam.fbo[(i - 1) % 2].tex); bind(1, su.tex.id); bind(2, pp.tex.mask); bind(3, su.tex.img); bind(4, su.tex.ref);
-    const up = new Float32Array(NL * NP * 3), um = new Uint8Array(MAXID * 4), uu = new Float32Array(6);
+    const up = new Float32Array(NL * NP * 3), um = new Uint8Array(MAXID * 4), uu = new Float32Array(6), ue = new Float32Array(6);
     pp.layers.forEach((L, k) => {
       P.forEach((p, j) => up.set(L.params[p[0]], (k * NP + j) * 3));
       if (!k) return;
       for (const id of L.mask) if (id >= 0 && id < MAXID) um[id * 4 + k - 1] = 255;
       uu[(k - 1) * 2] = L.mask.length ? 1 : 0; uu[(k - 1) * 2 + 1] = hasShape(pp, k) ? 1 : 0;
+      ue[(k - 1) * 2] = L.grow || 0; ue[(k - 1) * 2 + 1] = L.soft || 0;
     });
     gl.uniform3fv(cam.u.uP, up); bind(5, cam.lut); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, MAXID, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, um); gl.uniform1fv(cam.u.uUse, uu);
+    gl.uniform2fv(cam.u.uEdge, ue); gl.uniform2f(cam.u.uTexel, 1 / su.w, 1 / su.h); gl.uniform1f(cam.u.uScale, su.h / 1080);
     // the divider is a screen position; the image may be zoomed and panned, so convert it to an image position
     const useRef = S.refOn && !!su.refW, vw = cam.view || { z:1, x:0, y:0 };
     gl.uniform1f(cam.u.uWipe, last && (S.compare || useRef) ? (S.wipe - .5 - vw.x) / vw.z + .5 : -1);
@@ -929,7 +961,7 @@ function syncPanel() {
     hasP && hasS ? "This layer grades the chosen parts, only inside the shapes." :
     hasP ? "This layer grades the chosen parts." : hasS ? "This layer grades inside the shapes. Feather is the slider on each shape." :
     "Empty mask: choose parts and/or draw a shape, otherwise this layer changes nothing.";
-  syncIdBox();
+  syncIdBox(); syncEdge();
   syncOutputs();
 }
 function select(i) { if (i !== S.sel) { cancelDraw(); S.shape = -1; } S.sel = i; syncPanel(); refresh(); }
@@ -962,6 +994,22 @@ function typedIds() {
   logMsg("stencil IDs typed for " + su.id + " layer " + S.layer + ": " + (idsText(ids) || "none"));
   syncPanel(); refresh(); pushSoon(); syncIdBox(true);
   if (unknown.length) toast("No mesh in the open levels has stencil " + unknown.join(", ") + " yet; it is in the mask anyway");
+}
+// stencil edge (per layer): grow / shrink and soften, in pixels at 1080 lines
+function syncEdge(force) { const su = cur(); if (!su || !S.layer) return; const L = su.layers[S.layer];
+  for (const [n, v] of [["egrow", L.grow || 0], ["esoft", L.soft || 0]]) { $(n).value = v;
+    if (force || document.activeElement !== $(n + "v")) $(n + "v").value = String(Math.round(v * 100) / 100); }
+  $("egrow").parentNode.parentNode.classList.toggle("off", !L.mask.length); }
+function setEdge(key, x, live) { const su = cur(); if (!su || !S.layer || !isFinite(x)) return syncEdge(true);
+  if (key === "soft") x = Math.max(0, x);
+  su.layers[S.layer][key] = x; syncEdge(!live); refresh(); pushSoon();
+  if (!su.layers[S.layer].mask.length) toast("Grow and soften work on stencil parts: type or pick parts for this layer"); }
+for (const [n, key] of [["egrow", "grow"], ["esoft", "soft"]]) {
+  $(n).addEventListener("input", () => setEdge(key, +$(n).value, true));
+  $(n + "v").addEventListener("change", () => setEdge(key, parseFloat($(n + "v").value)));
+  $(n + "v").addEventListener("focus", () => $(n + "v").select());
+  $(n + "v").addEventListener("keydown", e => { if (e.key === "Enter") $(n + "v").blur(); else if (e.key === "Escape") { syncEdge(true); $(n + "v").blur(); } });
+  $(n).previousElementSibling.addEventListener("dblclick", () => setEdge(key, 0));
 }
 $("sidbox").addEventListener("change", typedIds);
 $("sidbox").addEventListener("focus", () => $("sidbox").select());
@@ -1018,7 +1066,7 @@ $("match").onclick = need(() => {
 });
 $("copy").onclick = need(() => { S.clip = clone(cur().layers); toast("Copied grades from " + cur().name); });
 $("paste").onclick = need(() => { if (S.clip) { cur().layers = clone(S.clip); changed("Pasted onto " + cur().name); } });
-$("reset").onclick = need(() => { const m = cur().layers[S.layer].mask; cur().layers[S.layer] = defLayer(); cur().layers[S.layer].mask = m;
+$("reset").onclick = need(() => { const o = cur().layers[S.layer]; cur().layers[S.layer] = Object.assign(defLayer(), { mask:o.mask, grow:o.grow || 0, soft:o.soft || 0 });
   changed(LAYERS[S.layer] + " reset"); });
 $("live").onclick = need(() => { post({ op:"pilot", id:cur().id }); toast("Viewing " + cur().cam + " / " + cur().name + " in Unreal"); });
 $("eject").onclick = () => post({ op:"eject" });
