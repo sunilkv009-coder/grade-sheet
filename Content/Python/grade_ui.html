@@ -1345,7 +1345,7 @@ function renderWizard() {
       ok.style.padding = "0"; ok.append(cb, "Allow base / read-only levels for the grade" + (why ? " (" + f.target + " " + why + ")" : ""));
       frm.append(el("span", "", "Protected"), ok);
       if (why) { const h = el("div", "hint", "Grades are normally kept out of base and not-checked-out levels. With this ticked, the grade volume is placed in "
-        + f.target + "; check the level out before you press Save grades."); h.style.color = "var(--warn)"; body.appendChild(h); } }
+        + f.target + "; check the level out before you save it."); h.style.color = "var(--warn)"; body.appendChild(h); } }
     if (n > 1) { const all = el("button", "", "Use this combination for all " + n + " cameras and finish"); all.onclick = allCameras;
       all.title = "Each camera gets the same levels, with its own camera level swapped in"; frm.append(el("span"), all); }
   }

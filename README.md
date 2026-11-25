@@ -89,7 +89,8 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
   **Log** button in the window, and send it along when reporting a problem.
 
 - **What it changes and saves in your project.** Nothing is saved until you press **Save grades**, and then only
-  the tool's own folder (`Content/GradeSheet`) and the levels your grade volumes live in. Showing and hiding levels
+  the tool's own folder (`Content/GradeSheet`). Levels are never saved or checked out by the tool: grade volumes it
+  adds just make their level show as unsaved, and you save the levels yourself when you are ready. Showing and hiding levels
   for previews and captures does not mark any level as changed, and the current level is put back the way you had
   it. After a capture (or *Stop viewing*) the levels of the camera shown last stay visible and the others stay
   hidden, so you do not have to switch levels off by hand. The stencil ID view used for part picking sits on the tool's own grade volume, so
@@ -97,7 +98,7 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
   the variant is switched back afterwards, so you can leave that level unsaved.
 - **Perforce / read-only levels.** Levels that are not checked out count as read-only. The setup wizard shows a
   warning and an *Allow base / read-only levels* tick box instead of placing a grade there silently. Check those
-  levels out before **Save grades**.
+  levels out yourself before you save them.
 
 - **Captures while the window is in front.** For the length of a capture the tool keeps Unreal drawing in the
   background (it switches off *Use Less CPU when in Background* and the interface's sleep, and turns the viewport's
