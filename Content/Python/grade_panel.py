@@ -300,9 +300,29 @@ class Bridge(object):
             except Exception:
                 warn("could not read " + CFG)
         self.scan()
+        self.ensure_volumes("open")
         renamed = [ppv_label(s) for s in self.cfg["setups"] if self.name_volume(s)]
         if renamed:                                              # volumes from an older version get the studio names
             info("renamed volumes: " + ", ".join(renamed))
+
+    def ensure_volumes(self, why):
+        """Every setup must have its grade volume: one that does not exist (deleted, never saved, lost in a crash)
+        is created again in the setup's level, with its grade instance. Returns the problems, if any."""
+        made, problems = [], []
+        for st in self.cfg["setups"]:
+            if st["id"] in self.ppvs:
+                continue
+            try:
+                self.ensure_setup(st)
+                made.append(st["id"])
+            except Exception as e:
+                glog.error("%s: could not make the grade volume of %s: %s" % (why, st["id"], e))
+                problems.append("%s / %s: %s" % (st["cam"], st["name"], e))
+        if made:
+            self.rest_state()
+            self.restore_current()
+            info("%s: made missing grade volumes: %s" % (why, ", ".join(made)))
+        return problems
 
     def scan(self):
         """Cameras, grade volumes and stencil parts currently in the world."""
@@ -725,16 +745,7 @@ class Bridge(object):
             self.write_state("Created level " + name)
         elif op == "save":
             self.scan()
-            made = []
-            for st in self.cfg["setups"]:                        # a setup without its volume (deleted, never saved,
-                if st["id"] not in self.ppvs:                    # lost in a crash): make it again in its level
-                    try:
-                        self.ensure_setup(st)
-                        made.append(st["id"])
-                    except Exception as e:
-                        glog.error("save: could not make the grade volume of %s: %s" % (st["id"], e))
-            if made:
-                glog.info("save: made missing grade volumes: " + ", ".join(made))
+            self.ensure_volumes("save")
             for sid, layers in c.get("grades", {}).items():
                 self.apply(sid, layers)
             self.rest_state()
@@ -809,6 +820,7 @@ class Bridge(object):
                 self.write_state("Capture stopped")
         elif op == "capture":
             self.scan()                                          # pick up newly assigned part IDs
+            self.ensure_volumes("capture")
             self.start_capture(c.get("ids"))
         elif op == "py":                                         # run another script from the Scripts folder
             path = os.path.abspath(os.path.join(HERE, os.path.basename(c.get("file", ""))))
