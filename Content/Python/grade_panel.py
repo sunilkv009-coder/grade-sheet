@@ -881,19 +881,27 @@ class Bridge(object):
         try:
             perf = perf_settings()
             if perf is None:
-                raise RuntimeError("the Editor Performance settings are not reachable from Python in this engine")
-            if on:
+                # UE 5.6: the settings object is not reachable from Python. The editor's own "set" console command
+                # changes it on the class defaults, which is what the editor reads every frame.
+                # The value cannot be read back, so it is not put back afterwards either (that could switch on a
+                # preference the user had switched off); it stays off until Unreal restarts.
+                if on:
+                    sl.execute_console_command(None, "set EditorPerformanceSettings bThrottleCPUWhenNotForeground 0")
+                    glog.info("'use less CPU in background' switched off with the console command 'set'")
+                    self.perf_note = ("If this keeps counting, turn off Editor Preferences > General > Performance > "
+                                      "Use Less CPU when in Background")
+            elif on:
                 if self.throttle is None:
                     self.throttle = perf.get_editor_property("throttle_cpu_when_not_foreground")
                 perf.set_editor_property("throttle_cpu_when_not_foreground", False)
-            elif self.throttle is not None:
+            elif perf is not None and self.throttle is not None:
                 perf.set_editor_property("throttle_cpu_when_not_foreground", self.throttle)
                 self.throttle = None
         except Exception:
             glog.error("could not change 'use less CPU in background'")
             if on:
-                self.perf_note = ("Unreal draws nothing while this window is in front: turn off Editor Preferences > "
-                                  "Performance > Use Less CPU when in Background")
+                self.perf_note = ("If this keeps counting, turn off Editor Preferences > General > Performance > "
+                                  "Use Less CPU when in Background")
         try:                                                     # the editor interface must keep ticking
             if on and self.slate_sleep is None:
                 try:
