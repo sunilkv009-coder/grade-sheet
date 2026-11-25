@@ -103,6 +103,8 @@ The list of setups is stored in `<YourProject>/Config/GradeSheetSetups.json`. Ca
 - **Finished pictures.** Each camera gets 6 seconds to settle, and its picture is rendered 64 frames before it is
   saved, so lighting, reflections and anti-aliasing are finished. If pictures still look soft or noisy in a heavy
   scene, raise `SHOT_FRAMES` (and `SETTLE_SEC`) at the top of `Content/Python/grade_panel.py`.
+- **Stencil IDs box** in a layer's mask: type the stencil IDs to grade and press Enter, for example `20` for the
+  car paint, or `20, 31-33`. `0` is the background. It stays in step with the part chips and Pick parts.
 - **Create PPVs for colours** (Setups > Create PPVs for colours): tick the levels, then the colours from Variant
   Manager (tables with COLOR in the name; otherwise every table). Unreal makes one `PPV_Variant_<code>` per colour in
   each level: unbound, enabled, attached to the level's `PPV_CarPaint` actor (or put in a `PPV_CarPaint` folder).

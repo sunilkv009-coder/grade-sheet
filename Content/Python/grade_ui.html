@@ -115,6 +115,9 @@
   label.ck small.warn { color:var(--warn); }
   #parts { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0; max-height:92px; overflow:auto; }
   #parts .chip { cursor:pointer; color:var(--text); }
+  .sid { display:flex; align-items:center; gap:8px; margin:6px 0; } .sid span { color:var(--mute); font-size:12px; white-space:nowrap; }
+  .sid input { flex:1; font-family:ui-monospace,Consolas,monospace; }
+  .sid input.bad { border-color:var(--warn); }
   #parts .cnt { width:100%; color:var(--mute); font-size:11px; }
   #lvmenu button.wide { width:100%; margin-top:6px; }
   #parts .chip.on { background:rgba(255,80,200,.18); border-color:#ff50c8; color:#ffb3ea; }
@@ -230,6 +233,8 @@
       <div class="tabs" id="tabs"></div>
       <div id="maskbox">
         <p class="lbl sp">Mask by car parts</p>
+        <div class="sid"><span>Stencil IDs</span><input type="text" id="sidbox" placeholder="for example 20, or 20, 31-33"
+          title="Type the stencil IDs this layer grades and press Enter (Esc cancels). 0 = background (everything without an ID). Ranges like 31-33 work. Empty + Enter clears the parts."></div>
         <div class="btns three">
           <button id="pick">Pick parts</button><button id="show">Show mask</button><button id="clear">Clear</button>
         </div>
@@ -924,9 +929,44 @@ function syncPanel() {
     hasP && hasS ? "This layer grades the chosen parts, only inside the shapes." :
     hasP ? "This layer grades the chosen parts." : hasS ? "This layer grades inside the shapes. Feather is the slider on each shape." :
     "Empty mask: choose parts and/or draw a shape, otherwise this layer changes nothing.";
+  syncIdBox();
   syncOutputs();
 }
 function select(i) { if (i !== S.sel) { cancelDraw(); S.shape = -1; } S.sel = i; syncPanel(); refresh(); }
+// the Stencil IDs box: "20" or "20, 31-33" -> the layer's mask (0 = background). null when the text is not valid.
+function parseIds(text) {
+  const out = [];
+  for (const part of String(text).split(/[\s,;]+/).filter(Boolean)) {
+    const m = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/); if (!m) return null;
+    const a = +m[1], b = m[2] !== undefined ? +m[2] : a; if (a > 255 || b > 255 || b < a || b - a > 255) return null;
+    for (let i = a; i <= b; i++) if (!out.includes(i)) out.push(i);
+  }
+  return out;
+}
+function idsText(mask) {                       // [20, 31, 32, 33] -> "20, 31-33"
+  const v = [...mask].sort((a, b) => a - b), out = [];
+  for (let i = 0; i < v.length; i++) { let j = i; while (j + 1 < v.length && v[j + 1] === v[j] + 1) j++;
+    out.push(j - i >= 2 ? v[i] + "-" + v[j] : v.slice(i, j + 1).join(", ")); i = j; }
+  return out.join(", ");
+}
+function syncIdBox(force) { const su = cur(), box = $("sidbox"); if (!su || (!force && document.activeElement === box)) return;
+  box.value = idsText(su.layers[S.layer].mask); box.classList.remove("bad"); }
+function typedIds() {
+  const su = cur(), box = $("sidbox"); if (!su) return;
+  const ids = parseIds(box.value);
+  if (ids === null) { box.classList.add("bad"); toast("Stencil IDs: numbers 0-255, separated by commas, ranges like 31-33"); return; }
+  const L = su.layers[S.layer];
+  if (idsText(ids) === idsText(L.mask)) return syncIdBox(true);
+  const unknown = ids.filter(i => i > 0 && !S.parts.some(p => p.id === i));
+  L.mask.splice(0, L.mask.length, ...ids);
+  logMsg("stencil IDs typed for " + su.id + " layer " + S.layer + ": " + (idsText(ids) || "none"));
+  syncPanel(); refresh(); pushSoon(); syncIdBox(true);
+  if (unknown.length) toast("No mesh in the open levels has stencil " + unknown.join(", ") + " yet; it is in the mask anyway");
+}
+$("sidbox").addEventListener("change", typedIds);
+$("sidbox").addEventListener("focus", () => $("sidbox").select());
+$("sidbox").addEventListener("keydown", e => { if (e.key === "Enter") { typedIds(); $("sidbox").blur(); }
+  else if (e.key === "Escape") { syncIdBox(true); $("sidbox").blur(); } });
 function toggleId(id) {
   const m = cur().layers[S.layer].mask, k = m.indexOf(id);
   if (k < 0) m.push(id); else m.splice(k, 1);
