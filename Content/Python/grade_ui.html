@@ -243,7 +243,7 @@
         <div id="parts"></div>
         <div class="btns"><button id="maskall" class="wide">Use these parts on all cameras</button></div>
         <p class="lbl sp">Mask by drawn shapes</p>
-        <div class="btns"><button id="drawbtn" title="Draw a shape with its own grade (it goes on the next free layer)">Draw a new shape</button><button id="drawadd" title="Draw another shape into this layer; it shares this layer's grade">Add to this layer</button></div>
+        <div class="btns"><button id="drawbtn" title="Draw a shape. On a layer with parts and no shape yet, it is drawn inside those parts; otherwise it gets its own grade on the next free layer">Draw a new shape</button><button id="drawadd" title="Draw another shape into this layer; it shares this layer's grade">Add to this layer</button></div>
         <div id="shapes"></div>
         <div class="hint" id="maskhint"></div>
       </div>
@@ -1034,12 +1034,16 @@ $("refon").onclick = need(() => { if (!cur().refW) return toast("Upload a refere
   smooth(() => { S.refOn = !S.refOn; if (S.refOn) S.solo = true; syncPanel(); refresh(); }); });
 $("pick").onclick = need(() => { cancelDraw(); S.tool = S.tool === "pick" ? "none" : "pick"; S.shape = -1; syncPanel(); refresh(); });
 // a new shape gets its own grade: it goes on the next layer that has no mask yet (A, B, C).
+// Exception (like a roto inside a matte in Nuke): a layer with parts but no shape yet takes the shape itself,
+// so the shape is cut to those parts.
 // "Add to this layer" draws into the current layer instead (the shapes then share that layer's grade).
 const layerUsed = (su, k) => su.layers[k].mask.length > 0 || hasShape(su, k);
 $("drawbtn").onclick = need(() => {
   if (S.tool === "draw") { cancelDraw(); syncPanel(); return refresh(); }
   const su = cur();
-  if (layerUsed(su, S.layer)) {
+  if (!hasShape(su, S.layer) && su.layers[S.layer].mask.length) {
+    toast("Drawing inside " + LAYERS[S.layer] + "'s parts: only where both meet gets graded");
+  } else if (layerUsed(su, S.layer)) {
     const free = [1, 2, 3].find(k => !layerUsed(su, k));
     if (!free) { toast("Layers A, B and C all have a mask. Use Add to this layer, or clear a layer first"); return; }
     S.layer = free; toast("The new shape gets its own grade on " + LAYERS[free]);
