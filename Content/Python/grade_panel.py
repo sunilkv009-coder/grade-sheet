@@ -834,48 +834,21 @@ class Bridge(object):
             self.rest_state()
             eal.save_directory(PKG, True, True)                  # the tool's own folder, changed assets only
             self.dirty_masks = set()
-            levels = sublevels()                                 # and only the levels the grades live in
-            pkgs = list({levels[s["target"]].get_outermost().get_name(): levels[s["target"]].get_outermost()
-                         for s in self.cfg["setups"] if s["target"] in levels}.values())
+            # Levels are NOT saved or checked out here: the volumes stay in the open levels and the artist saves the
+            # levels when ready (Unreal lists them as unsaved).
             problems = []
             for st in self.cfg["setups"]:                        # every grade volume must be in its own level
                 vol = self.ppvs.get(st["id"])
                 where = lname(vol.get_outer()) if vol else None
                 if where != st["target"]:
                     problems.append("%s / %s: %s" % (st["cam"], st["name"], "no grade volume, and it could not be made (see Log)" if not where else "volume is in %s, not %s" % (where, st["target"])))
-            writable = []
-            for pk in pkgs:
-                f = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir()),
-                                 pk.get_name()[len("/Game/"):] + ".umap") if pk.get_name().startswith("/Game/") else ""
-                if f and os.path.exists(f) and not os.access(f, os.W_OK):
-                    problems.append("%s not saved: read-only, check it out in Perforce and press Save grades again"
-                                    % pk.get_name().split("/")[-1])
-                else:
-                    writable.append(pk)
-            sc = getattr(unreal, "SourceControl", None)          # Perforce: check the levels out before saving
-            try:
-                if sc is not None and sc.is_enabled():
-                    for pk in writable:
-                        ok = sc.check_out_or_add_file(pk.get_name(), True)
-                        glog.info("  check out %s: %s%s" % (pk.get_name(), "ok" if ok else "FAILED",
-                                                           "" if ok else " (" + str(sc.last_error_msg()) + ")"))
-            except Exception:
-                glog.warn("could not check the levels out (source control)")
-            glog.info("save grades: %s and levels %s" % (PKG, ", ".join(p.get_name() for p in writable) or "none"))
-            if writable:
-                unreal.EditorLoadingAndSavingUtils.save_packages(writable, True)
-            try:                                                 # anything Unreal still has unsaved?
-                still = set(p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages())
-                problems += ["%s not saved: is it checked out in Perforce / not read-only? (see the Output Log)" % p.get_name().split("/")[-1]
-                             for p in writable if p.get_name() in still]
-            except Exception:
-                pass
+            glog.info("save grades: %s (levels are not saved by the tool)" % PKG)
             with open(os.path.join(CAP_DIR, "grades.json"), "w") as f:
                 json.dump(c.get("grades", {}), f, indent=1)
             self.save_cfg()
             for x in problems:
                 warn("save: " + x)
-            self.write_state(("Saved %d grade setups and their levels" % len(self.cfg["setups"])) if not problems else
+            self.write_state(("Saved %d grade setups (levels not saved: save them yourself when ready)" % len(self.cfg["setups"])) if not problems else
                              "NOT everything was saved. " + "; ".join(problems[:3]) + (" (+%d more, see Log)" % (len(problems) - 3)
                                                                                      if len(problems) > 3 else ""))
         elif op == "preview":                                    # setup wizard: show this camera with these levels
