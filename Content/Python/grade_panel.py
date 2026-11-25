@@ -724,6 +724,17 @@ class Bridge(object):
             les.set_current_level_by_name(lname(unreal.EditorLevelUtils.get_levels(get_world())[0]))
             self.write_state("Created level " + name)
         elif op == "save":
+            self.scan()
+            made = []
+            for st in self.cfg["setups"]:                        # a setup without its volume (deleted, never saved,
+                if st["id"] not in self.ppvs:                    # lost in a crash): make it again in its level
+                    try:
+                        self.ensure_setup(st)
+                        made.append(st["id"])
+                    except Exception as e:
+                        glog.error("save: could not make the grade volume of %s: %s" % (st["id"], e))
+            if made:
+                glog.info("save: made missing grade volumes: " + ", ".join(made))
             for sid, layers in c.get("grades", {}).items():
                 self.apply(sid, layers)
             self.rest_state()
@@ -737,8 +748,7 @@ class Bridge(object):
                 vol = self.ppvs.get(st["id"])
                 where = lname(vol.get_outer()) if vol else None
                 if where != st["target"]:
-                    problems.append("%s / %s: %s" % (st["cam"], st["name"], "no grade volume (open Cameras and levels, "
-                                    "press Done)" if not where else "volume is in %s, not %s" % (where, st["target"])))
+                    problems.append("%s / %s: %s" % (st["cam"], st["name"], "no grade volume, and it could not be made (see Log)" if not where else "volume is in %s, not %s" % (where, st["target"])))
             writable = []
             for pk in pkgs:
                 f = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir()),
